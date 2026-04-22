@@ -193,99 +193,112 @@ module.exports = {
    * @param {Array<String>} files Array of files to process
    */
   async processFiles(files, user) {
-    for (const item of files) {
-      const contentType = pageHelper.getContentType(item.relPath)
-      const fileExists = await fs.pathExists(item.file.path)
-      if (!item.binary && contentType) {
-        // -> Page
+    WIKI.logger.info(`(STORAGE/GIT) Processing ${files.length} files in parallel (limit = 12)`)
 
-        if (fileExists && !item.importAll && item.relPath !== item.oldPath) {
-          // Page was renamed by git, so rename in DB
-          WIKI.logger.info(`(STORAGE/GIT) Page marked as renamed: from ${item.oldPath} to ${item.relPath}`)
+    const pLimit = require('p-limit')
+    const limit = pLimit(12) // 12 concurrent renders
 
-          const contentPath = pageHelper.getPagePath(item.oldPath)
-          const contentDestinationPath = pageHelper.getPagePath(item.relPath)
-          await WIKI.models.pages.movePage({
-            user: user,
-            path: contentPath.path,
-            destinationPath: contentDestinationPath.path,
-            locale: contentPath.locale,
-            destinationLocale: contentPath.locale,
-            skipStorage: true
-          })
-        } else if (!fileExists && !item.importAll && item.deletions > 0 && item.insertions === 0) {
-          // Page was deleted by git, can safely mark as deleted in DB
-          WIKI.logger.info(`(STORAGE/GIT) Page marked as deleted: ${item.relPath}`)
+    await Promise.all(
+      files.map(item => limit(() => this.processFile(item, user)))
+    )
+  },
+   /**
+   * Process File
+   *
+   * @param {String} item File to process
+   */
+  async processFile(item, user) {
+    const contentType = pageHelper.getContentType(item.relPath)
+    const fileExists = await fs.pathExists(item.file.path)
+    if (!item.binary && contentType) {
+      // -> Page
 
-          const contentPath = pageHelper.getPagePath(item.relPath)
-          await WIKI.models.pages.deletePage({
-            user: user,
-            path: contentPath.path,
-            locale: contentPath.locale,
-            skipStorage: true
-          })
-          continue
+      if (fileExists && !item.importAll && item.relPath !== item.oldPath) {
+        // Page was renamed by git, so rename in DB
+        WIKI.logger.info(`(STORAGE/GIT) Page marked as renamed: from ${item.oldPath} to ${item.relPath}`)
+
+        const contentPath = pageHelper.getPagePath(item.oldPath)
+        const contentDestinationPath = pageHelper.getPagePath(item.relPath)
+        await WIKI.models.pages.movePage({
+          user: user,
+          path: contentPath.path,
+          destinationPath: contentDestinationPath.path,
+          locale: contentPath.locale,
+          destinationLocale: contentPath.locale,
+          skipStorage: true
+        })
+      } else if (!fileExists && !item.importAll && item.deletions > 0 && item.insertions === 0) {
+        // Page was deleted by git, can safely mark as deleted in DB
+        WIKI.logger.info(`(STORAGE/GIT) Page marked as deleted: ${item.relPath}`)
+
+        const contentPath = pageHelper.getPagePath(item.relPath)
+        await WIKI.models.pages.deletePage({
+          user: user,
+          path: contentPath.path,
+          locale: contentPath.locale,
+          skipStorage: true
+        })
+        return
+      }
+
+      try {
+        await commonDisk.processPage({
+          user,
+          relPath: item.relPath,
+          fullPath: this.repoPath,
+          contentType: contentType,
+          moduleName: 'GIT'
+        })
+      } catch (err) {
+        WIKI.logger.warn(`(STORAGE/GIT) Failed to process ${item.relPath}`)
+        WIKI.logger.warn(err)
+      }
+    } else {
+      // -> Asset
+
+      if (fileExists && !item.importAll && ((item.before === item.after) || (item.deletions === 0 && item.insertions === 0))) {
+        // Asset was renamed by git, so rename in DB
+        WIKI.logger.info(`(STORAGE/GIT) Asset marked as renamed: from ${item.oldPath} to ${item.relPath}`)
+
+        const fileHash = assetHelper.generateHash(item.relPath)
+        const assetToRename = await WIKI.models.assets.query().findOne({ hash: fileHash })
+        if (assetToRename) {
+          await WIKI.models.assets.query().patch({
+            filename: item.relPath,
+            hash: fileHash
+          }).findById(assetToRename.id)
+          await assetToRename.deleteAssetCache()
+        } else {
+          WIKI.logger.info(`(STORAGE/GIT) Asset was not found in the DB, nothing to rename: ${item.relPath}`)
         }
+        return
+      } else if (!fileExists && !item.importAll && ((item.before > 0 && item.after === 0) || (item.deletions > 0 && item.insertions === 0))) {
+        // Asset was deleted by git, can safely mark as deleted in DB
+        WIKI.logger.info(`(STORAGE/GIT) Asset marked as deleted: ${item.relPath}`)
 
-        try {
-          await commonDisk.processPage({
-            user,
-            relPath: item.relPath,
-            fullPath: this.repoPath,
-            contentType: contentType,
-            moduleName: 'GIT'
-          })
-        } catch (err) {
-          WIKI.logger.warn(`(STORAGE/GIT) Failed to process ${item.relPath}`)
-          WIKI.logger.warn(err)
+        const fileHash = assetHelper.generateHash(item.relPath)
+        const assetToDelete = await WIKI.models.assets.query().findOne({ hash: fileHash })
+        if (assetToDelete) {
+          await WIKI.models.knex('assetData').where('id', assetToDelete.id).del()
+          await WIKI.models.assets.query().deleteById(assetToDelete.id)
+          await assetToDelete.deleteAssetCache()
+        } else {
+          WIKI.logger.info(`(STORAGE/GIT) Asset was not found in the DB, nothing to delete: ${item.relPath}`)
         }
-      } else {
-        // -> Asset
+        return
+      }
 
-        if (fileExists && !item.importAll && ((item.before === item.after) || (item.deletions === 0 && item.insertions === 0))) {
-          // Asset was renamed by git, so rename in DB
-          WIKI.logger.info(`(STORAGE/GIT) Asset marked as renamed: from ${item.oldPath} to ${item.relPath}`)
-
-          const fileHash = assetHelper.generateHash(item.relPath)
-          const assetToRename = await WIKI.models.assets.query().findOne({ hash: fileHash })
-          if (assetToRename) {
-            await WIKI.models.assets.query().patch({
-              filename: item.relPath,
-              hash: fileHash
-            }).findById(assetToRename.id)
-            await assetToRename.deleteAssetCache()
-          } else {
-            WIKI.logger.info(`(STORAGE/GIT) Asset was not found in the DB, nothing to rename: ${item.relPath}`)
-          }
-          continue
-        } else if (!fileExists && !item.importAll && ((item.before > 0 && item.after === 0) || (item.deletions > 0 && item.insertions === 0))) {
-          // Asset was deleted by git, can safely mark as deleted in DB
-          WIKI.logger.info(`(STORAGE/GIT) Asset marked as deleted: ${item.relPath}`)
-
-          const fileHash = assetHelper.generateHash(item.relPath)
-          const assetToDelete = await WIKI.models.assets.query().findOne({ hash: fileHash })
-          if (assetToDelete) {
-            await WIKI.models.knex('assetData').where('id', assetToDelete.id).del()
-            await WIKI.models.assets.query().deleteById(assetToDelete.id)
-            await assetToDelete.deleteAssetCache()
-          } else {
-            WIKI.logger.info(`(STORAGE/GIT) Asset was not found in the DB, nothing to delete: ${item.relPath}`)
-          }
-          continue
-        }
-
-        try {
-          await commonDisk.processAsset({
-            user,
-            relPath: item.relPath,
-            file: item.file,
-            contentType: contentType,
-            moduleName: 'GIT'
-          })
-        } catch (err) {
-          WIKI.logger.warn(`(STORAGE/GIT) Failed to process asset ${item.relPath}`)
-          WIKI.logger.warn(err)
-        }
+      try {
+        await commonDisk.processAsset({
+          user,
+          relPath: item.relPath,
+          file: item.file,
+          contentType: contentType,
+          moduleName: 'GIT'
+        })
+      } catch (err) {
+        WIKI.logger.warn(`(STORAGE/GIT) Failed to process asset ${item.relPath}`)
+        WIKI.logger.warn(err)
       }
     }
   },
@@ -429,44 +442,37 @@ module.exports = {
   /**
    * HANDLERS
    */
-  async importAll() {
-    WIKI.logger.info(`(STORAGE/GIT) Importing all content from local Git repo to the DB...`)
+async importAll() {
+  WIKI.logger.info(`(STORAGE/GIT) Importing all content from local Git repo to the DB...`)
 
-    const rootUser = await WIKI.models.users.getRootUser()
+  const rootUser = await WIKI.models.users.getRootUser()
 
-    await pipeline(
-      klaw(this.repoPath, {
-        filter: (f) => {
-          return !_.includes(f, '.git')
-        }
-      }),
-      new Transform({
-        objectMode: true,
-        transform: async (file, enc, cb) => {
-          const relPath = file.path.substr(this.repoPath.length + 1)
-          if (file.stats.size < 1) {
-            // Skip directories and zero-byte files
-            return cb()
-          } else if (relPath && relPath.length > 3) {
-            WIKI.logger.info(`(STORAGE/GIT) Processing ${relPath}...`)
-            await this.processFiles([{
-              user: rootUser,
-              relPath,
-              file,
-              deletions: 0,
-              insertions: 0,
-              importAll: true
-            }], rootUser)
-          }
-          cb()
+  const files = await new Promise((resolve, reject) => {
+    const results = []
+    klaw(this.repoPath, { filter: (f) => !_.includes(f, '.git') })
+      .on('data', (file) => {
+        const relPath = file.path.substr(this.repoPath.length + 1)
+        if (file.stats.size >= 1 && relPath && relPath.length > 3) {
+          results.push({
+            user: rootUser,
+            relPath,
+            file,
+            deletions: 0,
+            insertions: 0,
+            importAll: true
+          })
         }
       })
-    )
+      .on('error', reject)
+      .on('end', () => resolve(results))
+  })
 
-    commonDisk.clearFolderCache()
+  WIKI.logger.info(`(STORAGE/GIT) Processing ${files.length} files...`)
+  await this.processFiles(files, rootUser)
 
-    WIKI.logger.info('(STORAGE/GIT) Import completed.')
-  },
+  commonDisk.clearFolderCache()
+  WIKI.logger.info('(STORAGE/GIT) Import completed.')
+},
   async syncUntracked() {
     WIKI.logger.info(`(STORAGE/GIT) Adding all untracked content...`)
 
