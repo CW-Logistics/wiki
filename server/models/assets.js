@@ -110,7 +110,7 @@ module.exports = class Asset extends Model {
       const svgSanitizeJob = await WIKI.scheduler.registerJob({
         name: 'sanitize-svg',
         immediate: true,
-        worker: true
+        worker: false
       }, opts.path)
       await svgSanitizeJob.finished
     }
