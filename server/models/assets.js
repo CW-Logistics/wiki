@@ -199,9 +199,10 @@ module.exports = class Asset extends Model {
     } catch (err) {
       return false
     }
-    const sendFile = Promise.promisify(res.sendFile, {context: res})
     res.type(path.extname(assetPath))
-    await sendFile(cachePath, { dotfiles: 'deny' })
+    await new Promise((resolve, reject) => {
+      res.sendFile(cachePath, { dotfiles: 'deny' }, (err) => err ? reject(err) : resolve())
+    })
     return true
   }
 
