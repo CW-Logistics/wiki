@@ -70,7 +70,7 @@ module.exports = {
     this.clearFolderCache()
   },
 
-  async processPage ({ user, fullPath, relPath, contentType, moduleName }) {
+  async processPage ({ user, fullPath, relPath, contentType, moduleName, skipTree = false }) {
     const normalizedRelPath = relPath.replace(/\\/g, '/')
     const contentPath = pageHelper.getPagePath(normalizedRelPath)
     const itemContents = await fs.readFile(path.join(fullPath, relPath), 'utf8')
@@ -92,7 +92,8 @@ module.exports = {
         isPrivate: false,
         content: pageData.content,
         user: user,
-        skipStorage: true
+        skipStorage: true,
+        skipTree
       })
     } else {
       // Not in the DB, can mark as new
@@ -109,7 +110,8 @@ module.exports = {
         content: pageData.content,
         user: user,
         editor: pageEditor,
-        skipStorage: true
+        skipStorage: true,
+        skipTree
       })
     }
   },

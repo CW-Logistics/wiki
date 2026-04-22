@@ -24,6 +24,7 @@ defaults:
       min: 1
     workers:
       threadPoolSize: 2
+      treeRebuildInterval: 50
     bindIP: 0.0.0.0
     logLevel: info
     logFormat: default

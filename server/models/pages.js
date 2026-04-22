@@ -333,7 +333,9 @@ module.exports = class Page extends Model {
     await WIKI.models.pages.renderPage(page)
 
     // -> Rebuild page tree
-    await WIKI.models.pages.rebuildTree()
+    if (!opts.skipTree) {
+      await WIKI.models.pages.rebuildTree()
+    }
 
     // -> Add to Search Index
     const pageContents = await WIKI.models.pages.query().findById(page.id).select('render')
@@ -736,7 +738,9 @@ module.exports = class Page extends Model {
     WIKI.events.outbound.emit('deletePageFromCache', page.hash)
 
     // -> Rebuild page tree
-    await WIKI.models.pages.rebuildTree()
+    if (!opts.skipTree) {
+      await WIKI.models.pages.rebuildTree()
+    }
 
     // -> Rename in Search Index
     const pageContents = await WIKI.models.pages.query().findById(page.id).select('render')
@@ -815,7 +819,9 @@ module.exports = class Page extends Model {
     WIKI.events.outbound.emit('deletePageFromCache', page.hash)
 
     // -> Rebuild page tree
-    await WIKI.models.pages.rebuildTree()
+    if (!opts.skipTree) {
+      await WIKI.models.pages.rebuildTree()
+    }
 
     // -> Delete from Search Index
     await WIKI.data.searchEngine.deleted(page)

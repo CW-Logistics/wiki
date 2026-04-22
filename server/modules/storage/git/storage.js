@@ -194,14 +194,39 @@ module.exports = {
    */
   async processFiles(files, user) {
     const poolSize = _.get(WIKI, 'config.workers.threadPoolSize', 4)
-    WIKI.logger.info(`(STORAGE/GIT) Processing ${files.length} files in parallel (limit = ${poolSize})`)
+    const rebuildInterval = _.get(WIKI, 'config.workers.treeRebuildInterval', 50)
+    WIKI.logger.info(`(STORAGE/GIT) Processing ${files.length} files in parallel (limit = ${poolSize}, tree rebuild every ${rebuildInterval} pages)`)
 
     const pLimit = require('p-limit')
     const limit = pLimit(poolSize)
 
+    let processedPageCount = 0
+    // Mutex: chain rebuilds so they never run concurrently
+    let rebuildChain = Promise.resolve()
+
+    const scheduleRebuild = () => {
+      rebuildChain = rebuildChain.then(() => {
+        WIKI.logger.info(`(STORAGE/GIT) Rebuilding page tree (${processedPageCount}/${files.length} pages processed)...`)
+        return WIKI.models.pages.rebuildTree()
+      })
+    }
+
     await Promise.all(
-      files.map(item => limit(() => this.processFile(item, user)))
+      files.map(item => limit(async () => {
+        await this.processFile(item, user)
+        const contentType = pageHelper.getContentType(item.relPath)
+        if (!item.binary && contentType) {
+          processedPageCount++
+          if (processedPageCount % rebuildInterval === 0) {
+            scheduleRebuild()
+          }
+        }
+      }))
     )
+
+    // Final rebuild to catch any remainder
+    scheduleRebuild()
+    await rebuildChain
   },
    /**
    * Process File
@@ -226,7 +251,8 @@ module.exports = {
           destinationPath: contentDestinationPath.path,
           locale: contentPath.locale,
           destinationLocale: contentPath.locale,
-          skipStorage: true
+          skipStorage: true,
+          skipTree: true
         })
       } else if (!fileExists && !item.importAll && item.deletions > 0 && item.insertions === 0) {
         // Page was deleted by git, can safely mark as deleted in DB
@@ -237,7 +263,8 @@ module.exports = {
           user: user,
           path: contentPath.path,
           locale: contentPath.locale,
-          skipStorage: true
+          skipStorage: true,
+          skipTree: true
         })
         return
       }
@@ -248,7 +275,8 @@ module.exports = {
           relPath: item.relPath,
           fullPath: this.repoPath,
           contentType: contentType,
-          moduleName: 'GIT'
+          moduleName: 'GIT',
+          skipTree: true
         })
       } catch (err) {
         WIKI.logger.warn(`(STORAGE/GIT) Failed to process ${item.relPath}`)
