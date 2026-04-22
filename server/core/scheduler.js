@@ -1,9 +1,79 @@
 const moment = require('moment')
-const childProcess = require('child_process')
+const { Worker } = require('worker_threads')
+const path = require('path')
 const _ = require('lodash')
 const configHelper = require('../helpers/config')
 
 /* global WIKI */
+
+class ThreadPool {
+  constructor(size) {
+    this.size = size
+    this.workers = []
+    this.idle = []
+    this.queue = []
+    this.jobCounter = 0
+    this.pending = new Map()
+  }
+
+  start() {
+    for (let i = 0; i < this.size; i++) {
+      this._spawnWorker()
+    }
+  }
+
+  _spawnWorker() {
+    const worker = new Worker(path.join(WIKI.SERVERPATH, 'core/worker-thread.js'))
+    worker.once('message', (msg) => {
+      if (msg.ready) {
+        this.idle.push(worker)
+        this._drain()
+      }
+    })
+    worker.on('message', (msg) => {
+      if (msg.ready) return
+      const { resolve, reject } = this.pending.get(msg.jobId) || {}
+      this.pending.delete(msg.jobId)
+      this.idle.push(worker)
+      this._drain()
+      if (!resolve) return
+      if (msg.ok) {
+        resolve()
+      } else {
+        reject(new Error(msg.error))
+      }
+    })
+    worker.on('error', (err) => {
+      WIKI.logger.error(`(SCHEDULER) Thread pool worker error: ${err.message}`)
+      // replace the dead worker
+      this.workers = this.workers.filter(w => w !== worker)
+      this._spawnWorker()
+    })
+    this.workers.push(worker)
+  }
+
+  _drain() {
+    if (this.queue.length === 0 || this.idle.length === 0) return
+    const { jobId, job, data, resolve, reject } = this.queue.shift()
+    const worker = this.idle.pop()
+    this.pending.set(jobId, { resolve, reject })
+    worker.postMessage({ jobId, job, data })
+  }
+
+  run(job, data) {
+    return new Promise((resolve, reject) => {
+      const jobId = ++this.jobCounter
+      this.queue.push({ jobId, job, data, resolve, reject })
+      this._drain()
+    })
+  }
+
+  async stop() {
+    await Promise.all(this.workers.map(w => w.terminate()))
+    this.workers = []
+    this.idle = []
+  }
+}
 
 class Job {
   constructor({
@@ -53,30 +123,7 @@ class Job {
   async invoke(data) {
     try {
       if (this.worker) {
-        const proc = childProcess.fork(`server/core/worker.js`, [
-          `--job=${this.name}`,
-          `--data=${data}`
-        ], {
-          cwd: WIKI.ROOTPATH,
-          stdio: ['inherit', 'inherit', 'pipe', 'ipc']
-        })
-        const stderr = []
-        proc.stderr.on('data', chunk => stderr.push(chunk))
-        this.finished = new Promise((resolve, reject) => {
-          proc.on('exit', (code, signal) => {
-            const data = Buffer.concat(stderr).toString()
-            if (code === 0) {
-              resolve(data)
-            } else {
-              const err = new Error(`Error when running job ${this.name}: ${data}`)
-              err.exitSignal = signal
-              err.exitCode = code
-              err.stderr = data
-              reject(err)
-            }
-            proc.kill()
-          })
-        })
+        this.finished = this.queue.threadPool.run(this.name, data)
       } else {
         this.finished = require(`../jobs/${this.name}`)(data)
       }
@@ -103,10 +150,16 @@ class Job {
 
 module.exports = {
   jobs: [],
+  threadPool: null,
   init() {
     return this
   },
   start() {
+    const poolSize = _.get(WIKI, 'config.workers.threadPoolSize', 1)
+    WIKI.logger.info(`(SCHEDULER) Starting thread pool with ${poolSize} worker(s)...`)
+    this.threadPool = new ThreadPool(poolSize)
+    this.threadPool.start()
+
     _.forOwn(WIKI.data.jobs, (queueParams, queueName) => {
       if (WIKI.config.offline && queueParams.offlineSkip) {
         WIKI.logger.warn(`Skipping job ${queueName} because offline mode is enabled. [SKIPPED]`)
@@ -129,6 +182,9 @@ module.exports = {
     return job
   },
   async stop() {
-    return Promise.all(this.jobs.map(job => job.stop()))
+    await Promise.all(this.jobs.map(job => job.stop()))
+    if (this.threadPool) {
+      await this.threadPool.stop()
+    }
   }
 }

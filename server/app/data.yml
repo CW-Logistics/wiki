@@ -22,6 +22,8 @@ defaults:
       enabled: false
     pool:
       min: 1
+    workers:
+      threadPoolSize: 2
     bindIP: 0.0.0.0
     logLevel: info
     logFormat: default

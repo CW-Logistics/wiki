@@ -193,10 +193,11 @@ module.exports = {
    * @param {Array<String>} files Array of files to process
    */
   async processFiles(files, user) {
-    WIKI.logger.info(`(STORAGE/GIT) Processing ${files.length} files in parallel (limit = 12)`)
+    const poolSize = _.get(WIKI, 'config.workers.threadPoolSize', 4)
+    WIKI.logger.info(`(STORAGE/GIT) Processing ${files.length} files in parallel (limit = ${poolSize})`)
 
     const pLimit = require('p-limit')
-    const limit = pLimit(12) // 12 concurrent renders
+    const limit = pLimit(poolSize)
 
     await Promise.all(
       files.map(item => limit(() => this.processFile(item, user)))
