@@ -51,7 +51,7 @@
             v-icon(small) mdi-folder-open
           v-list-item-title {{ item.title }}
         v-divider.mt-2
-        v-list-item.mt-2(v-if='currentParent.pageId > 0', :href='`/` + currentParent.locale + `/` + currentParent.path', :key='`directorypage-` + currentParent.id', :input-value='path === currentParent.path')
+        v-list-item.mt-2(v-if='currentParent.pageId > 0 && path !== currentParent.path', :href='`/` + currentParent.locale + `/` + currentParent.path', :key='`directorypage-` + currentParent.id', :input-value='path === currentParent.path')
           v-list-item-avatar(size='24')
             v-icon mdi-text-box
           v-list-item-title {{ currentParent.title }}
@@ -193,13 +193,25 @@ export default {
         }
       })
       const items = _.get(resp, 'data.pages.tree', [])
+      console.debug('[nav] pageId=', this.$store.get('page/id'), 'items=', JSON.parse(JSON.stringify(items)))
       const curPage = _.find(items, ['pageId', this.$store.get('page/id')])
       if (!curPage) {
         console.warn('Could not find current page in page tree listing!')
         return
       }
 
-      let curParentId = curPage.parent
+      // If this page has a matching folder node (same path), treat it as a folder index
+      // and show the folder's children rather than the page's siblings
+      const matchingFolder = _.find(items, i => i.isFolder && i.path === curPage.path)
+      const activeFolder = matchingFolder || null
+
+      // Walk up ancestors to build the breadcrumb.
+      // When curPage is itself the folder node (folder-index pattern), matchingFolder === curPage,
+      // so we start walking from curPage.parent — those ancestors go into the breadcrumb trail,
+      // and curPage becomes currentParent (the active level). We must NOT push matchingFolder
+      // into invertedAncestors again or it ends up duplicated/reversed in the breadcrumb.
+      const isFolderIndex = matchingFolder && matchingFolder.id === curPage.id
+      let curParentId = matchingFolder ? matchingFolder.parent : curPage.parent
       let invertedAncestors = []
       while (curParentId) {
         const curParent = _.find(items, ['id', curParentId])
@@ -210,11 +222,19 @@ export default {
         curParentId = curParent.parent
       }
 
-      this.parents = [this.currentParent, ...invertedAncestors.reverse()]
-      this.currentParent = _.last(this.parents)
+      if (matchingFolder && !isFolderIndex) {
+        // Separate page + folder at same path: folder is the active level, push it last
+        invertedAncestors.push(matchingFolder)
+      }
 
-      this.loadedCache = [curPage.parent]
-      this.currentItems = _.filter(items, ['parent', curPage.parent])
+      const activeParent = isFolderIndex ? curPage : (matchingFolder || curPage)
+      this.parents = [this.currentParent, ...invertedAncestors.reverse(), activeParent]
+      this.currentParent = activeParent
+
+      const parentId = activeFolder ? activeFolder.id : curPage.parent
+      this.loadedCache = [parentId]
+      this.currentItems = _.filter(items, ['parent', parentId])
+      console.debug('[nav] curPage=', curPage, 'matchingFolder=', matchingFolder, 'parentId=', parentId, 'currentItems=', JSON.parse(JSON.stringify(this.currentItems)), 'currentParent=', JSON.parse(JSON.stringify(this.currentParent)))
       this.$store.commit(`loadingStop`, 'browse-load')
     },
     goHome () {

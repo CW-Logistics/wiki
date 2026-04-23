@@ -251,17 +251,37 @@ module.exports = {
 
       if (!args.locale) { args.locale = WIKI.config.lang.code }
 
+      let matchingFolder = null
+
       if (args.path && !args.parent) {
-        curPage = await WIKI.models.knex('pageTree').first('parent', 'ancestors').where({
-          path: args.path,
-          localeCode: args.locale
-        })
-        if (curPage) {
-          args.parent = curPage.parent || 0
+        // Fetch the page and any same-path folder in a single query to avoid exhausting the connection pool
+        const pathRows = await WIKI.models.knex('pageTree')
+          .select('id', 'parent', 'ancestors', 'isFolder', 'pageId')
+          .where({ path: args.path, localeCode: args.locale })
+        curPage = pathRows.find(r => !r.isFolder) || null
+        matchingFolder = pathRows.find(r => r.isFolder) || null
+        WIKI.logger.debug(`[tree] path=${args.path} pathRows=${JSON.stringify(pathRows)} curPage=${JSON.stringify(curPage)} matchingFolder=${JSON.stringify(matchingFolder)}`)
+
+        if (matchingFolder && !curPage) {
+          // Folder-index pattern: the page IS the folder row (pageId is set on the folder)
+          // Treat the folder itself as the active level — show its children
+          curPage = matchingFolder
+          matchingFolder = null
+          args.parent = curPage.id
+        } else if (curPage) {
+          // Separate page + folder at the same path: show folder's children
+          args.parent = matchingFolder ? matchingFolder.id : (curPage.parent || 0)
         } else {
           return []
         }
       }
+
+      // Ancestors to include in the result so the client can build its breadcrumb trail.
+      // Use the matching folder's ancestors when present, since it is the active tree level.
+      const activeNode = matchingFolder || curPage
+      const ancestorIds = (args.includeAncestors && activeNode && activeNode.ancestors)
+        ? (_.isString(activeNode.ancestors) ? JSON.parse(activeNode.ancestors) : activeNode.ancestors)
+        : []
 
       const results = await WIKI.models.knex('pageTree').where(builder => {
         builder.where('localeCode', args.locale)
@@ -277,11 +297,16 @@ module.exports = {
           builder.whereNull('parent')
         } else {
           builder.where('parent', args.parent)
-          if (args.includeAncestors && curPage && curPage.ancestors.length > 0) {
-            builder.orWhereIn('id', _.isString(curPage.ancestors) ? JSON.parse(curPage.ancestors) : curPage.ancestors)
+          if (ancestorIds.length > 0) {
+            builder.orWhereIn('id', ancestorIds)
+          }
+          // Always include the active node itself so the client can find it by pageId
+          if (curPage) {
+            builder.orWhere('id', curPage.id)
           }
         }
       }).orderBy([{ column: 'isFolder', order: 'desc' }, 'title'])
+      WIKI.logger.debug(`[tree] args.parent=${args.parent} returning ${results.length} rows: ${JSON.stringify(results.map(r => ({id: r.id, path: r.path, isFolder: r.isFolder, parent: r.parent})))}`)
       return results.filter(r => {
         return WIKI.auth.checkAccess(context.req.user, ['read:pages'], {
           path: r.path,
