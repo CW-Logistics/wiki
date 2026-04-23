@@ -74,18 +74,49 @@ $releaseFiles = $allRelative | Where-Object {
     -not ($excludePatterns | Where-Object { $f -match $_ })
 }
 
-# Always include all rebuilt assets (gitignored, so git diff won't list them)
-$assetFiles = Get-ChildItem -Path "$PSScriptRoot\assets" -Recurse -File |
-    ForEach-Object { $_.FullName.Replace("$PSScriptRoot\", '').Replace('\', '/') }
+# assets/ is gitignored so git diff won't list individual files.
+# Compare file hashes against the tagged version via git archive to find what actually changed.
+Write-Host "`n==> Comparing built assets against '$Tag'..." -ForegroundColor Cyan
 
-$releaseFiles = @($releaseFiles) + @($assetFiles) | Sort-Object -Unique
+$changedAssets = @()
+$tagAssetHashes = @{}
+
+# Extract assets from the tag into a temp dir to compare
+$tempTag = Join-Path ([System.IO.Path]::GetTempPath()) "wiki-tag-assets-$Tag"
+if (Test-Path $tempTag) { Remove-Item $tempTag -Recurse -Force }
+New-Item -ItemType Directory -Path $tempTag -Force | Out-Null
+
+# git archive only contains tracked files — assets/ was tracked at release time
+git archive $Tag -- assets/ | tar -x -C $tempTag 2>$null
+
+if (Test-Path "$tempTag\assets") {
+    # Build hash map of tag's assets
+    Get-ChildItem -Path "$tempTag\assets" -Recurse -File | ForEach-Object {
+        $rel = $_.FullName.Replace("$tempTag\", '').Replace('\', '/')
+        $tagAssetHashes[$rel] = (Get-FileHash $_.FullName -Algorithm MD5).Hash
+    }
+}
+
+# Compare current assets against tag
+$currentAssets = Get-ChildItem -Path "$PSScriptRoot\assets" -Recurse -File
+foreach ($file in $currentAssets) {
+    $rel = $file.FullName.Replace("$PSScriptRoot\", '').Replace('\', '/')
+    $currentHash = (Get-FileHash $file.FullName -Algorithm MD5).Hash
+    if (-not $tagAssetHashes.ContainsKey($rel) -or $tagAssetHashes[$rel] -ne $currentHash) {
+        $changedAssets += $rel
+    }
+}
+
+Remove-Item $tempTag -Recurse -Force
+
+$releaseFiles = @($releaseFiles) + @($changedAssets) | Sort-Object -Unique
 
 if ($releaseFiles.Count -eq 0) {
     Write-Host "`nNo changed files found since '$Tag'. Nothing to export." -ForegroundColor Yellow
     exit 0
 }
 
-# --- Copy to output directory ---
+# --- Copy to output directory, patching package.json ---
 $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 Write-Host "`n==> Copying $($releaseFiles.Count) files to: $OutputDir" -ForegroundColor Cyan
 
@@ -108,7 +139,16 @@ foreach ($rel in $releaseFiles) {
     if (-not (Test-Path $destDir)) {
         New-Item -ItemType Directory -Path $destDir -Force | Out-Null
     }
-    Copy-Item $src $dest -Force
+
+    if ($rel -eq 'package.json') {
+        # Strip the "dev": true flag so the release doesn't show the dev warning
+        # and uses production telemetry / Let's Encrypt endpoints
+        $pkg = Get-Content $src -Raw | ConvertFrom-Json
+        $pkg.PSObject.Properties.Remove('dev')
+        $pkg | ConvertTo-Json -Depth 32 | Set-Content $dest -Encoding UTF8
+    } else {
+        Copy-Item $src $dest -Force
+    }
     $copied++
 }
 
@@ -121,6 +161,6 @@ if ($missing -gt 0) {
     Write-Host "    Missing   : $missing file(s) (listed above as warnings)" -ForegroundColor Yellow
 }
 
-Write-Host "`nChanged source files included:" -ForegroundColor DarkGray
+Write-Host "`nChanged files included:" -ForegroundColor DarkGray
 $releaseFiles | Where-Object { $_ -notmatch '^assets/' } | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
-Write-Host "  + $($assetFiles.Count) asset file(s) from assets/" -ForegroundColor DarkGray
+Write-Host "  + $($changedAssets.Count) changed asset file(s) from assets/" -ForegroundColor DarkGray
