@@ -198,18 +198,18 @@ module.exports = {
      * FETCH TAGS
      */
     async tags (obj, args, context, info) {
-      const pages = await WIKI.models.pages.query()
-        .column([
-          'path',
-          { locale: 'localeCode' }
-        ])
-        .withGraphJoined('tags')
-      const allTags = _.filter(pages, r => {
+      // Join tags back to pages only for access control — select only what's needed
+      const rows = await WIKI.models.knex('tags')
+        .select('tags.id', 'tags.tag', 'pages.path', 'pages.localeCode as locale')
+        .join('pageTags', 'pageTags.tagId', 'tags.id')
+        .join('pages', 'pages.id', 'pageTags.pageId')
+        .orderBy('tags.tag')
+      const allTags = _.filter(rows, r => {
         return WIKI.auth.checkAccess(context.req.user, ['read:pages'], {
           path: r.path,
           locale: r.locale
         })
-      }).flatMap(r => r.tags)
+      })
       return _.orderBy(_.uniqBy(allTags, 'id'), ['tag'], ['asc'])
     },
     /**
@@ -217,30 +217,18 @@ module.exports = {
      */
     async searchTags (obj, args, context, info) {
       const query = _.trim(args.query)
-      const pages = await WIKI.models.pages.query()
-        .column([
-          'path',
-          { locale: 'localeCode' }
-        ])
-        .withGraphJoined('tags')
-        .modifyGraph('tags', builder => {
-          builder.select('tag')
-        })
-        .modify(queryBuilder => {
-          queryBuilder.andWhere(builderSub => {
-            if (WIKI.config.db.type === 'postgres') {
-              builderSub.where('tags.tag', 'ILIKE', `%${query}%`)
-            } else {
-              builderSub.where('tags.tag', 'LIKE', `%${query}%`)
-            }
-          })
-        })
-      const allTags = _.filter(pages, r => {
+      const likeOp = WIKI.config.db.type === 'postgres' ? 'ILIKE' : 'LIKE'
+      const rows = await WIKI.models.knex('tags')
+        .select('tags.tag', 'pages.path', 'pages.localeCode as locale')
+        .join('pageTags', 'pageTags.tagId', 'tags.id')
+        .join('pages', 'pages.id', 'pageTags.pageId')
+        .where('tags.tag', likeOp, `%${query}%`)
+      const allTags = _.filter(rows, r => {
         return WIKI.auth.checkAccess(context.req.user, ['read:pages'], {
           path: r.path,
           locale: r.locale
         })
-      }).flatMap(r => r.tags).map(t => t.tag)
+      }).map(r => r.tag)
       return _.uniq(allTags).slice(0, 5)
     },
     /**
@@ -260,7 +248,6 @@ module.exports = {
           .where({ path: args.path, localeCode: args.locale })
         curPage = pathRows.find(r => !r.isFolder) || null
         matchingFolder = pathRows.find(r => r.isFolder) || null
-        WIKI.logger.debug(`[tree] path=${args.path} pathRows=${JSON.stringify(pathRows)} curPage=${JSON.stringify(curPage)} matchingFolder=${JSON.stringify(matchingFolder)}`)
 
         if (matchingFolder && !curPage) {
           // Folder-index pattern: the page IS the folder row (pageId is set on the folder)
@@ -306,7 +293,6 @@ module.exports = {
           }
         }
       }).orderBy([{ column: 'isFolder', order: 'desc' }, 'title'])
-      WIKI.logger.debug(`[tree] args.parent=${args.parent} returning ${results.length} rows: ${JSON.stringify(results.map(r => ({id: r.id, path: r.path, isFolder: r.isFolder, parent: r.parent})))}`)
       return results.filter(r => {
         return WIKI.auth.checkAccess(context.req.user, ['read:pages'], {
           path: r.path,

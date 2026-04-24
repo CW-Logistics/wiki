@@ -23,6 +23,7 @@ module.exports = {
     legacy: ['./client/index-legacy.js', 'webpack-hot-middleware/client'],
     setup: ['./client/index-setup.js', 'webpack-hot-middleware/client']
   },
+  devtool: 'eval-cheap-module-source-map',
   output: {
     path: path.join(process.cwd(), 'assets'),
     publicPath: '/_assets/',

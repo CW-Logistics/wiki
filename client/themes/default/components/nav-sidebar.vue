@@ -193,10 +193,8 @@ export default {
         }
       })
       const items = _.get(resp, 'data.pages.tree', [])
-      console.debug('[nav] pageId=', this.$store.get('page/id'), 'items=', JSON.parse(JSON.stringify(items)))
       const curPage = _.find(items, ['pageId', this.$store.get('page/id')])
       if (!curPage) {
-        console.warn('Could not find current page in page tree listing!')
         return
       }
 
@@ -234,7 +232,6 @@ export default {
       const parentId = activeFolder ? activeFolder.id : curPage.parent
       this.loadedCache = [parentId]
       this.currentItems = _.filter(items, ['parent', parentId])
-      console.debug('[nav] curPage=', curPage, 'matchingFolder=', matchingFolder, 'parentId=', parentId, 'currentItems=', JSON.parse(JSON.stringify(this.currentItems)), 'currentParent=', JSON.parse(JSON.stringify(this.currentParent)))
       this.$store.commit(`loadingStop`, 'browse-load')
     },
     goHome () {

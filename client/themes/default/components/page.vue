@@ -382,7 +382,9 @@ Prism.plugins.NormalizeWhitespace.setDefaults({
   'remove-initial-line-feed': true,
   'tabs-to-spaces': 2
 })
-Prism.plugins.toolbar.registerButton('copy-to-clipboard', (env) => {
+if (!Prism.plugins.toolbar._wikiCopyRegistered) {
+  Prism.plugins.toolbar._wikiCopyRegistered = true
+  Prism.plugins.toolbar.registerButton('copy-to-clipboard', (env) => {
   let linkCopy = document.createElement('button')
   linkCopy.textContent = 'Copy'
 
@@ -407,6 +409,7 @@ Prism.plugins.toolbar.registerButton('copy-to-clipboard', (env) => {
     }, 5000)
   }
 })
+}
 
 export default {
   components: {

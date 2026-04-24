@@ -338,8 +338,10 @@ module.exports = class Page extends Model {
     }
 
     // -> Add to Search Index
-    const pageContents = await WIKI.models.pages.query().findById(page.id).select('render')
+    // Fetch render + updatedAt in one query (renderPage wrote render; DB sets updatedAt)
+    const pageContents = await WIKI.models.pages.query().findById(page.id).select('render', 'updatedAt')
     page.safeContent = WIKI.models.pages.cleanHTML(pageContents.render)
+    page.updatedAt = pageContents.updatedAt
     await WIKI.data.searchEngine.created(page)
 
     // -> Add to Storage
@@ -356,9 +358,6 @@ module.exports = class Page extends Model {
       path: page.path,
       mode: 'create'
     })
-
-    // -> Get latest updatedAt
-    page.updatedAt = await WIKI.models.pages.query().findById(page.id).select('updatedAt').then(r => r.updatedAt)
 
     return page
   }
@@ -449,8 +448,10 @@ module.exports = class Page extends Model {
     WIKI.events.outbound.emit('deletePageFromCache', page.hash)
 
     // -> Update Search Index
-    const pageContents = await WIKI.models.pages.query().findById(page.id).select('render')
+    // Fetch render + updatedAt in one query (renderPage wrote render; DB sets updatedAt)
+    const pageContents = await WIKI.models.pages.query().findById(page.id).select('render', 'updatedAt')
     page.safeContent = WIKI.models.pages.cleanHTML(pageContents.render)
+    page.updatedAt = pageContents.updatedAt
     await WIKI.data.searchEngine.updated(page)
 
     // -> Update on Storage
@@ -483,9 +484,6 @@ module.exports = class Page extends Model {
         pageId: page.id
       }).update('title', page.title)
     }
-
-    // -> Get latest updatedAt
-    page.updatedAt = await WIKI.models.pages.query().findById(page.id).select('updatedAt').then(r => r.updatedAt)
 
     return page
   }
