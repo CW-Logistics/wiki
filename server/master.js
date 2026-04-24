@@ -62,8 +62,19 @@ module.exports = async () => {
   })
   app.use('/_assets', express.static(path.join(WIKI.ROOTPATH, 'assets'), {
     index: false,
-    maxAge: '7d'
+    maxAge: WIKI.devMode ? '0' : '7d'
   }))
+  app.use((req, res, next) => {
+    const send = res.send.bind(res)
+    res.send = function (body) {
+      const ct = res.getHeader('Content-Type') || ''
+      if (typeof ct === 'string' && ct.includes('text/html')) {
+        res.setHeader('Cache-Control', 'no-cache')
+      }
+      return send(body)
+    }
+    next()
+  })
 
   // ----------------------------------------
   // SSL Handlers
