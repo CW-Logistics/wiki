@@ -74,36 +74,42 @@ $releaseFiles = $allRelative | Where-Object {
     -not ($excludePatterns | Where-Object { $f -match $_ })
 }
 
-# assets/ is gitignored so git diff won't list individual files.
+# assets/ and server/views/ are gitignored so git diff won't list their files.
 # Compare file hashes against the tagged version via git archive to find what actually changed.
-Write-Host "`n==> Comparing built assets against '$Tag'..." -ForegroundColor Cyan
+# server/views/ contains webpack-generated pug templates with asset fingerprint URLs —
+# without them the browser loads stale JS/CSS filenames and the layout breaks.
+Write-Host "`n==> Comparing built assets and views against '$Tag'..." -ForegroundColor Cyan
 
 $changedAssets = @()
-$tagAssetHashes = @{}
+$tagFileHashes = @{}
 
-# Extract assets from the tag into a temp dir to compare
+# Extract assets/ and server/views/ from the tag into a temp dir to compare
 $tempTag = Join-Path ([System.IO.Path]::GetTempPath()) "wiki-tag-assets-$Tag"
 if (Test-Path $tempTag) { Remove-Item $tempTag -Recurse -Force }
 New-Item -ItemType Directory -Path $tempTag -Force | Out-Null
 
-# git archive only contains tracked files — assets/ was tracked at release time
-git archive $Tag -- assets/ | tar -x -C $tempTag 2>$null
+git archive $Tag -- assets/ server/views/ | tar -x -C $tempTag 2>$null
 
-if (Test-Path "$tempTag\assets") {
-    # Build hash map of tag's assets
-    Get-ChildItem -Path "$tempTag\assets" -Recurse -File | ForEach-Object {
-        $rel = $_.FullName.Replace("$tempTag\", '').Replace('\', '/')
-        $tagAssetHashes[$rel] = (Get-FileHash $_.FullName -Algorithm MD5).Hash
+foreach ($folder in @('assets', 'server\views')) {
+    $fullFolder = Join-Path $tempTag $folder
+    if (Test-Path $fullFolder) {
+        Get-ChildItem -Path $fullFolder -Recurse -File | ForEach-Object {
+            $rel = $_.FullName.Replace("$tempTag\", '').Replace('\', '/')
+            $tagFileHashes[$rel] = (Get-FileHash $_.FullName -Algorithm MD5).Hash
+        }
     }
 }
 
-# Compare current assets against tag
-$currentAssets = Get-ChildItem -Path "$PSScriptRoot\assets" -Recurse -File
-foreach ($file in $currentAssets) {
-    $rel = $file.FullName.Replace("$PSScriptRoot\", '').Replace('\', '/')
-    $currentHash = (Get-FileHash $file.FullName -Algorithm MD5).Hash
-    if (-not $tagAssetHashes.ContainsKey($rel) -or $tagAssetHashes[$rel] -ne $currentHash) {
-        $changedAssets += $rel
+# Compare current assets/ and server/views/ against tag
+foreach ($folder in @('assets', 'server\views')) {
+    $fullFolder = Join-Path $PSScriptRoot $folder
+    if (-not (Test-Path $fullFolder)) { continue }
+    Get-ChildItem -Path $fullFolder -Recurse -File | ForEach-Object {
+        $rel = $_.FullName.Replace("$PSScriptRoot\", '').Replace('\', '/')
+        $currentHash = (Get-FileHash $_.FullName -Algorithm MD5).Hash
+        if (-not $tagFileHashes.ContainsKey($rel) -or $tagFileHashes[$rel] -ne $currentHash) {
+            $changedAssets += $rel
+        }
     }
 }
 
@@ -152,15 +158,62 @@ foreach ($rel in $releaseFiles) {
     $copied++
 }
 
+# --- Detect changed node_modules packages and copy them ---
+Write-Host "`n==> Detecting changed node_modules packages..." -ForegroundColor Cyan
+
+# Get package versions at the tag
+$tagPkgJson = git show "${Tag}:package.json" | ConvertFrom-Json
+$curPkgJson = Get-Content (Join-Path $PSScriptRoot 'package.json') -Raw | ConvertFrom-Json
+
+# Merge dependencies + devDependencies for both
+function Get-AllDeps($pkg) {
+    $d = @{}
+    if ($pkg.dependencies)    { $pkg.dependencies.PSObject.Properties    | ForEach-Object { $d[$_.Name] = $_.Value } }
+    if ($pkg.devDependencies) { $pkg.devDependencies.PSObject.Properties  | ForEach-Object { $d[$_.Name] = $_.Value } }
+    return $d
+}
+
+$tagDeps = Get-AllDeps $tagPkgJson
+$curDeps = Get-AllDeps $curPkgJson
+
+$changedPackages = @()
+foreach ($pkg in $curDeps.Keys) {
+    if (-not $tagDeps.ContainsKey($pkg) -or $tagDeps[$pkg] -ne $curDeps[$pkg]) {
+        $changedPackages += $pkg
+    }
+}
+
+$copiedPkgs = 0
+$missingPkgs = 0
+foreach ($pkg in $changedPackages) {
+    $src = Join-Path $PSScriptRoot "node_modules\$pkg"
+    if (-not (Test-Path $src)) {
+        Write-Warning "  MISSING node_modules package: $pkg"
+        $missingPkgs++
+        continue
+    }
+    $dest = Join-Path $OutputDir "node_modules\$pkg"
+    Write-Host "  + $pkg  ($($tagDeps[$pkg] ?? 'new') -> $($curDeps[$pkg]))" -ForegroundColor DarkGray
+    Copy-Item $src $dest -Recurse -Force
+    $copiedPkgs++
+}
+
 # --- Summary ---
 Write-Host "`n==> Done." -ForegroundColor Green
 Write-Host "    Tag       : $Tag"
 Write-Host "    Output    : $OutputDir"
 Write-Host "    Copied    : $copied file(s)"
+Write-Host "    Packages  : $copiedPkgs changed node_modules package(s) copied"
 if ($missing -gt 0) {
     Write-Host "    Missing   : $missing file(s) (listed above as warnings)" -ForegroundColor Yellow
 }
+if ($missingPkgs -gt 0) {
+    Write-Host "    Missing pkg: $missingPkgs package(s) not found in node_modules (listed above)" -ForegroundColor Yellow
+}
 
 Write-Host "`nChanged files included:" -ForegroundColor DarkGray
-$releaseFiles | Where-Object { $_ -notmatch '^assets/' } | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
-Write-Host "  + $($changedAssets.Count) changed asset file(s) from assets/" -ForegroundColor DarkGray
+$releaseFiles | Where-Object { $_ -notmatch '^assets/' -and $_ -notmatch '^server/views/' } | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+$assetCount = @($changedAssets | Where-Object { $_ -match '^assets/' }).Count
+$viewCount  = @($changedAssets | Where-Object { $_ -match '^server/views/' }).Count
+Write-Host "  + $assetCount changed asset file(s) from assets/" -ForegroundColor DarkGray
+Write-Host "  + $viewCount changed view file(s) from server/views/" -ForegroundColor DarkGray
