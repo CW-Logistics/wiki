@@ -141,6 +141,10 @@ module.exports = {
   },
   plugins: [
     new VueLoaderPlugin(),
+    new webpack.IgnorePlugin({
+      resourceRegExp: /^\.\/locale$/,
+      contextRegExp: /moment$/
+    }),
     new MomentTimezoneDataPlugin({
       startYear: 2017,
       endYear: (new Date().getFullYear()) + 5
