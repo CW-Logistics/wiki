@@ -236,6 +236,8 @@ const CtrlKey = /Mac/.test(navigator.platform) ? 'Cmd' : 'Ctrl'
 
 // Prism Config
 Prism.plugins.autoloader.languages_path = '/_assets/js/prism/'
+// mermaid is already bundled; mark it as loaded so autoloader doesn't fetch a conflicting plugin
+Prism.languages.mermaid = Prism.languages.mermaid || {}
 Prism.plugins.NormalizeWhitespace.setDefaults({
   'remove-trailing': true,
   'remove-indent': true,
@@ -253,7 +255,7 @@ const md = new MarkdownIt({
   typography: true,
   highlight(str, lang) {
     if (lang === 'diagram') {
-      return `<pre class="diagram">` + Buffer.from(str, 'base64').toString() + `</pre>`
+      return `<pre class="diagram">` + atob(str) + `</pre>`
     } else if (['mermaid', 'plantuml'].includes(lang)) {
       return `<pre class="codeblock-${lang}"><code>${_.escape(str)}</code></pre>`
     } else {
@@ -366,8 +368,6 @@ md.renderer.rules.emoji = (token, idx) => {
 // Vue Component
 // ========================================
 
-let mermaidId = 0
-
 export default {
   components: {
     markdownHelp
@@ -405,11 +405,7 @@ export default {
   watch: {
     previewShown (newValue, oldValue) {
       if (newValue && !oldValue) {
-        this.$nextTick(() => {
-          this.renderMermaidDiagrams()
-          Prism.highlightAllUnder(this.$refs.editorPreview)
-          Array.from(this.$refs.editorPreview.querySelectorAll('pre.line-numbers')).forEach(pre => pre.classList.add('prismjs'))
-        })
+        this.processContent(this.$store.get('editor/content'))
       }
     },
     spellModeActive (newValue, oldValue) {
@@ -453,13 +449,23 @@ export default {
       linesMap = []
       // this.$store.set('editor/content', newContent)
       this.processMarkers(this.cm.firstLine(), this.cm.lastLine())
-      this.previewHTML = DOMPurify.sanitize(md.render(newContent), {
+      let html = DOMPurify.sanitize(md.render(newContent), {
         ADD_TAGS: ['foreignObject'],
         HTML_INTEGRATION_POINTS: { foreignobject: true }
       })
-      this.$nextTick(() => {
+
+      // Replace mermaid blocks with placeholder divs; render after Vue commits to DOM
+      // so mermaid measures text in the real layout context (correct font + line-height)
+      html = html.replace(/<pre class="codeblock-mermaid"><code>([\s\S]*?)<\/code><\/pre>/g, (_, def) => {
+        const decoded = def.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+        return `<div class="mermaid-diagram mermaid">${decoded}</div>`
+      })
+
+      this.previewHTML = html
+      this.$nextTick(async () => {
         tabsetHelper.format()
-        this.renderMermaidDiagrams()
+        await document.fonts.ready
+        await mermaid.run({ querySelector: '.editor-markdown-preview .mermaid' })
         Prism.highlightAllUnder(this.$refs.editorPreview)
         Array.from(this.$refs.editorPreview.querySelectorAll('pre.line-numbers')).forEach(pre => pre.classList.add('prismjs'))
         this.scrollSync(this.cm)
@@ -585,15 +591,6 @@ export default {
         this.cm.refresh()
       })
     },
-    renderMermaidDiagrams () {
-      document.querySelectorAll('.editor-markdown-preview pre.codeblock-mermaid > code').forEach(elm => {
-        mermaidId++
-        const mermaidDef = elm.innerText
-        const mmElm = document.createElement('div')
-        mmElm.innerHTML = `<div id="mermaid-id-${mermaidId}">${mermaid.render(`mermaid-id-${mermaidId}`, mermaidDef)}</div>`
-        elm.parentElement.replaceWith(mmElm)
-      })
-    },
     autocomplete (cm, change) {
       if (cm.getModeAt(cm.getCursor()).name !== 'markdown') {
         return
@@ -694,7 +691,7 @@ export default {
                     this.cm.doc.setSelection({ line: start, ch: 0 }, { line: end, ch: 3 })
                     try {
                       const raw = this.cm.doc.getLine(end - 1)
-                      this.$store.set('editor/activeModalData', Buffer.from(raw, 'base64').toString())
+                      this.$store.set('editor/activeModalData', atob(raw))
                       this.toggleModal(`editorModalDrawio`)
                     } catch (err) {
                       return this.$store.commit('showNotification', {
@@ -734,7 +731,8 @@ export default {
     // Initialize Mermaid API
     mermaid.initialize({
       startOnLoad: false,
-      theme: this.$vuetify.theme.dark ? `dark` : `default`
+      theme: this.$vuetify.theme.dark ? `dark` : `default`,
+      fontFamily: 'Roboto, sans-serif'
     })
 
     // Initialize CodeMirror
@@ -935,6 +933,24 @@ $editor-height-mobile: calc(100vh - 112px - 16px);
 
       p.line {
         overflow-wrap: break-word;
+      }
+
+      .mermaid-diagram {
+        svg {
+          display: block;
+          width: 100%;
+          height: auto;
+
+          foreignObject {
+            div {
+              line-height: 1.2 !important;
+            }
+            p {
+              margin: 0 !important;
+              padding: 0 !important;
+            }
+          }
+        }
       }
 
       .tabset {

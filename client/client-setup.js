@@ -1,6 +1,7 @@
 /* eslint-disable import/first */
 import Vue from 'vue'
-import Vuetify from 'vuetify/lib'
+import Vuetify from 'vuetify'
+import 'vuetify/dist/vuetify.min.css'
 import boot from './modules/boot'
 /* eslint-enable import/first */
 

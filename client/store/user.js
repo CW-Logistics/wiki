@@ -1,5 +1,5 @@
 import { make } from 'vuex-pathify'
-import jwt from 'jsonwebtoken'
+const jwt = { decode: token => JSON.parse(atob(token.split('.')[1])) }
 import Cookies from 'js-cookie'
 
 const state = {

@@ -761,6 +761,16 @@
     }
   }
 
+  svg foreignObject {
+    div {
+      line-height: 1.2 !important;
+    }
+    p {
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+  }
+
   .diagram {
     margin-top: 1rem;
     overflow: auto;

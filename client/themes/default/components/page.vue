@@ -372,6 +372,8 @@ import Vue from 'vue'
 Vue.component('Tabset', Tabset)
 
 Prism.plugins.autoloader.languages_path = '/_assets/js/prism/'
+// mermaid is already bundled; mark it as loaded so autoloader doesn't fetch a conflicting plugin
+Prism.languages.mermaid = Prism.languages.mermaid || {}
 Prism.plugins.NormalizeWhitespace.setDefaults({
   'remove-trailing': true,
   'remove-indent': true,
@@ -457,7 +459,7 @@ export default {
       default: ''
     },
     isPublished: {
-      type: Boolean,
+      type: [Boolean, Number],
       default: false
     },
     toc: {
@@ -558,10 +560,10 @@ export default {
       }
     },
     sidebarDecoded () {
-      return JSON.parse(Buffer.from(this.sidebar, 'base64').toString())
+      return JSON.parse(atob(this.sidebar))
     },
     tocDecoded () {
-      return JSON.parse(Buffer.from(this.toc, 'base64').toString())
+      return JSON.parse(atob(this.toc))
     },
     tocPosition: get('site/tocPosition'),
     hasAdminPermission: get('page/effectivePermissions@system.manage'),
@@ -597,10 +599,10 @@ export default {
     this.$store.set('page/editor', this.editor)
     this.$store.set('page/updatedAt', this.updatedAt)
     if (this.effectivePermissions) {
-      this.$store.set('page/effectivePermissions', JSON.parse(Buffer.from(this.effectivePermissions, 'base64').toString()))
+      this.$store.set('page/effectivePermissions', JSON.parse(atob(this.effectivePermissions)))
     }
     if (this.editShortcuts) {
-      this.$store.set('page/editShortcuts', JSON.parse(Buffer.from(this.editShortcuts, 'base64').toString()))
+      this.$store.set('page/editShortcuts', JSON.parse(atob(this.editShortcuts)))
     }
 
     this.$store.set('page/mode', 'view')

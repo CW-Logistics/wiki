@@ -223,7 +223,7 @@ export default {
       })
 
       $('pre.highlight > code.language-diagram').each((i, elm) => {
-        const diagramContent = Buffer.from($(elm).html(), 'base64').toString()
+        const diagramContent = atob($(elm).html())
         $(elm).parent().replaceWith(`<pre class="diagram">${diagramContent}</div>`)
       })
 
@@ -352,7 +352,7 @@ export default {
                     this.cm.doc.setSelection({ line: start, ch: 0 }, { line: end, ch: 3 })
                     try {
                       const raw = this.cm.doc.getLine(end - 1)
-                      this.$store.set('editor/activeModalData', Buffer.from(raw, 'base64').toString())
+                      this.$store.set('editor/activeModalData', atob(raw))
                       this.toggleModal(`editorModalDrawio`)
                     } catch (err) {
                       return this.$store.commit('showNotification', {

@@ -10,17 +10,12 @@ const CopyWebpackPlugin = require('copy-webpack-plugin')
 const HtmlWebpackPlugin = require('html-webpack-plugin')
 const HtmlWebpackPugPlugin = require('html-webpack-pug-plugin')
 const MiniCssExtractPlugin = require('mini-css-extract-plugin')
+const CssMinimizerPlugin = require('css-minimizer-webpack-plugin')
 const MomentTimezoneDataPlugin = require('moment-timezone-data-webpack-plugin')
-const OptimizeCssAssetsPlugin = require('optimize-css-assets-webpack-plugin')
-const ScriptExtHtmlWebpackPlugin = require('script-ext-html-webpack-plugin')
-const VuetifyLoaderPlugin = require('vuetify-loader/lib/plugin')
-const WebpackBarPlugin = require('webpackbar')
 
 const now = Math.round(Date.now() / 1000)
 
 const babelConfig = fs.readJsonSync(path.join(process.cwd(), '.babelrc'))
-const cacheDir = '.webpack-cache/cache'
-const babelDir = path.join(process.cwd(), '.webpack-cache/babel')
 
 process.noDeprecation = true
 
@@ -41,6 +36,10 @@ module.exports = {
     globalObject: 'this',
     crossOriginLoading: 'use-credentials'
   },
+  cache: {
+    type: 'filesystem',
+    cacheDirectory: path.join(process.cwd(), '.webpack-cache')
+  },
   module: {
     rules: [
       {
@@ -50,16 +49,10 @@ module.exports = {
         },
         use: [
           {
-            loader: 'cache-loader',
-            options: {
-              cacheDirectory: cacheDir
-            }
-          },
-          {
             loader: 'babel-loader',
             options: {
               ...babelConfig,
-              cacheDirectory: babelDir
+              cacheDirectory: path.join(process.cwd(), '.webpack-cache/babel')
             }
           }
         ]
@@ -67,7 +60,6 @@ module.exports = {
       {
         test: /\.css$/,
         use: [
-          'style-loader',
           MiniCssExtractPlugin.loader,
           'css-loader',
           'postcss-loader'
@@ -76,37 +68,6 @@ module.exports = {
       {
         test: /\.sass$/,
         use: [
-          {
-            loader: 'cache-loader',
-            options: {
-              cacheDirectory: cacheDir
-            }
-          },
-          'style-loader',
-          'css-loader',
-          'postcss-loader',
-          {
-            loader: 'sass-loader',
-            options: {
-              implementation: require('sass'),
-              sourceMap: false,
-              sassOptions: {
-                fiber: false
-              }
-            }
-          }
-        ]
-      },
-      {
-        test: /\.scss$/,
-        use: [
-          {
-            loader: 'cache-loader',
-            options: {
-              cacheDirectory: cacheDir
-            }
-          },
-          'style-loader',
           MiniCssExtractPlugin.loader,
           'css-loader',
           'postcss-loader',
@@ -115,9 +76,23 @@ module.exports = {
             options: {
               implementation: require('sass'),
               sourceMap: false,
-              sassOptions: {
-                fiber: false
-              }
+              sassOptions: { fiber: false }
+            }
+          }
+        ]
+      },
+      {
+        test: /\.scss$/,
+        use: [
+          MiniCssExtractPlugin.loader,
+          'css-loader',
+          'postcss-loader',
+          {
+            loader: 'sass-loader',
+            options: {
+              implementation: require('sass'),
+              sourceMap: false,
+              sassOptions: { fiber: false }
             }
           },
           {
@@ -134,36 +109,19 @@ module.exports = {
       },
       {
         test: /\.pug$/,
-        exclude: [
-          path.join(process.cwd(), 'dev')
-        ],
+        exclude: [path.join(process.cwd(), 'dev')],
         loader: 'pug-plain-loader'
       },
       {
         test: /\.(png|jpg|gif)$/,
-        use: [
-          {
-            loader: 'url-loader',
-            options: {
-              limit: 8192
-            }
-          }
-        ]
+        type: 'asset',
+        parser: { dataUrlCondition: { maxSize: 8192 } }
       },
       {
         test: /\.svg$/,
-        exclude: [
-          path.join(process.cwd(), 'node_modules/grapesjs')
-        ],
-        use: [
-          {
-            loader: 'file-loader',
-            options: {
-              name: '[name].[ext]',
-              outputPath: 'svg/'
-            }
-          }
-        ]
+        exclude: [path.join(process.cwd(), 'node_modules/grapesjs')],
+        type: 'asset/resource',
+        generator: { filename: 'svg/[name][ext]' }
       },
       {
         test: /\.(graphql|gql)$/,
@@ -175,13 +133,8 @@ module.exports = {
       },
       {
         test: /\.(woff2|woff|ttf|eot)(\?v=\d+\.\d+\.\d+)?$/,
-        use: [{
-          loader: 'file-loader',
-          options: {
-            name: '[name].[ext]',
-            outputPath: 'fonts/'
-          }
-        }]
+        type: 'asset/resource',
+        generator: { filename: 'fonts/[name][ext]' }
       },
       {
         loader: 'webpack-modernizr-loader',
@@ -191,7 +144,6 @@ module.exports = {
   },
   plugins: [
     new VueLoaderPlugin(),
-    new VuetifyLoaderPlugin(),
     new webpack.BannerPlugin('Wiki.js - wiki.js.org - Licensed under AGPL'),
     new MomentTimezoneDataPlugin({
       startYear: 2017,
@@ -204,8 +156,8 @@ module.exports = {
       ]
     }),
     new MiniCssExtractPlugin({
-      filename: 'css/bundle.[hash].css',
-      chunkFilename: 'css/[name].[chunkhash].css'
+      filename: 'css/bundle.[contenthash].css',
+      chunkFilename: 'css/[name].[contenthash].css'
     }),
     new HtmlWebpackPlugin({
       template: 'dev/templates/master.pug',
@@ -229,32 +181,26 @@ module.exports = {
       excludeChunks: ['app', 'legacy']
     }),
     new HtmlWebpackPugPlugin(),
-    new ScriptExtHtmlWebpackPlugin({
-      sync: 'runtime.js',
-      defaultAttribute: 'async'
-    }),
-    new WebpackBarPlugin({
-      name: 'Client Assets'
-    }),
     new CleanWebpackPlugin(),
-    new OptimizeCssAssetsPlugin({
-      cssProcessorOptions: { discardComments: { removeAll: true } },
-      canPrint: true
-    }),
     new webpack.DefinePlugin({
       'process.env.NODE_ENV': JSON.stringify('production'),
       'process.env.CURRENT_THEME': JSON.stringify(_.defaultTo(yargs.theme, 'default'))
     }),
-    new webpack.optimize.MinChunkSizePlugin({
-      minChunkSize: 50000
-    })
   ],
   optimization: {
-    namedModules: true,
-    namedChunks: true,
+    minimize: true,
+    minimizer: [
+      '...', // keep default TerserPlugin for JS
+      new CssMinimizerPlugin({
+        minimizerOptions: {
+          preset: ['default', { discardComments: { removeAll: true } }]
+        }
+      })
+    ],
     splitChunks: {
-      name: 'vendor',
-      minChunks: 2
+      name: false,
+      minChunks: 2,
+      minSize: 50000
     },
     runtimeChunk: 'single'
   },
@@ -265,23 +211,20 @@ module.exports = {
       '@': path.join(process.cwd(), 'client'),
       'vue$': 'vue/dist/vue.esm.js',
       'gql': path.join(process.cwd(), 'client/graph'),
-      // Duplicates fixes:
       'apollo-link': path.join(process.cwd(), 'node_modules/apollo-link'),
       'apollo-utilities': path.join(process.cwd(), 'node_modules/apollo-utilities'),
       'uc.micro': path.join(process.cwd(), 'node_modules/uc.micro'),
       'modernizr$': path.resolve(process.cwd(), 'client/.modernizrrc.js')
     },
-    extensions: [
-      '.js',
-      '.json',
-      '.vue'
-    ],
-    modules: [
-      'node_modules'
-    ]
-  },
-  node: {
-    fs: 'empty'
+    extensions: ['.js', '.json', '.vue'],
+    modules: ['node_modules'],
+    fallback: {
+      fs: false,
+      stream: false,
+      crypto: false,
+      path: false,
+      buffer: false
+    }
   },
   stats: {
     children: false,

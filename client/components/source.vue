@@ -66,7 +66,7 @@ export default {
     this.$store.commit('page/SET_MODE', 'source')
 
     if (this.effectivePermissions) {
-      this.$store.set('page/effectivePermissions', JSON.parse(Buffer.from(this.effectivePermissions, 'base64').toString()))
+      this.$store.set('page/effectivePermissions', JSON.parse(atob(this.effectivePermissions)))
     }
   },
   methods: {

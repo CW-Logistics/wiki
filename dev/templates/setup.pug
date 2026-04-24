@@ -39,6 +39,7 @@ html
     <% for (var index in htmlWebpackPlugin.files.js) { %>
     script(
       type='text/javascript'
+      defer
       src='<%= htmlWebpackPlugin.files.js[index] %>'
       )
     <% } %>
