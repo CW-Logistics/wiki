@@ -140,23 +140,22 @@ module.exports = {
       connection: dbConfig,
       pool: {
         ...WIKI.config.pool,
-        async afterCreate(conn, done) {
+        afterCreate(conn, done) {
           // -> Set Connection App Name
           switch (WIKI.config.db.type) {
-            case 'postgres':
-              await conn.query(`set application_name = 'Wiki.js'`)
-              // -> Set schema if it's not public
+            case 'postgres': {
+              const steps = [conn.query(`set application_name = 'Wiki.js'`)]
               if (WIKI.config.db.schema && WIKI.config.db.schema !== 'public') {
-                await conn.query(`set search_path TO ${WIKI.config.db.schema}, public;`)
+                steps.push(conn.query(`set search_path TO ${WIKI.config.db.schema}, public;`))
               }
-              done()
+              Promise.all(steps).then(() => done(null, conn)).catch(done)
               break
+            }
             case 'mysql':
-              await conn.promise().query(`set autocommit = 1`)
-              done()
+              conn.promise().query(`set autocommit = 1`).then(() => done(null, conn)).catch(done)
               break
             default:
-              done()
+              done(null, conn)
               break
           }
         }
