@@ -1006,6 +1006,11 @@
 
   img {
     max-width: 100%;
+    color-scheme: light;
+
+    @at-root .theme--dark & {
+      color-scheme: dark;
+    }
 
     &.align-left {
       float: left;

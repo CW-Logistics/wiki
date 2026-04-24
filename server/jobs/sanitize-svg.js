@@ -13,7 +13,11 @@ module.exports = async (svgPath) => {
     const window = new JSDOM('').window
     const DOMPurify = createDOMPurify(window)
 
-    svgContents = DOMPurify.sanitize(svgContents)
+    svgContents = DOMPurify.sanitize(svgContents, {
+      USE_PROFILES: { svg: true, svgFilters: true },
+      ADD_TAGS: ['style'],
+      FORCE_BODY: false
+    })
 
     await fs.writeFile(svgPath, svgContents)
     WIKI.logger.info(`Sanitized SVG file upload: [ COMPLETED ]`)
