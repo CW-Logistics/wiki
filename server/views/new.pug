@@ -2,4 +2,4 @@ extends master.pug
 
 block body
   #root.is-fullscreen
-    new-page(locale=locale, path=path)
+    new-page(locale=locale, path=path, can-write=canWrite ? 'true' : 'false')

@@ -193,7 +193,9 @@ export default {
         }
       })
       const items = _.get(resp, 'data.pages.tree', [])
-      const curPage = _.find(items, ['pageId', this.$store.get('page/id')])
+      // For virtual directory placeholders (pageId=0), fall back to matching the folder by path.
+      const curPage = _.find(items, ['pageId', this.$store.get('page/id')]) ||
+        (this.$store.get('page/id') === 0 ? _.find(items, i => i.isFolder && i.path === this.path) : null)
       if (!curPage) {
         return
       }

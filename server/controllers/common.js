@@ -562,11 +562,96 @@ router.get('/*', async (req, res, next) => {
         _.set(res.locals, 'pageMeta.title', 'Welcome')
         res.render('welcome', { locale: pageArgs.locale })
       } else {
-        _.set(res.locals, 'pageMeta.title', 'Page Not Found')
-        if (effectivePermissions.pages.write) {
-          res.status(404).render('new', { path: pageArgs.path, locale: pageArgs.locale })
+        // -> Try to show a directory placeholder for paths that have child pages/folders
+        const folderRow = await WIKI.models.knex('pageTree')
+          .where({ path: pageArgs.path, localeCode: pageArgs.locale, isFolder: true })
+          .first('id', 'title')
+
+        if (folderRow) {
+          // Fetch two levels: direct children, then children of each child-folder
+          const level1 = await WIKI.models.knex('pageTree')
+            .where({ parent: folderRow.id, localeCode: pageArgs.locale })
+            .orderBy([{ column: 'isFolder', order: 'desc' }, 'title'])
+            .select('id', 'path', 'title', 'isFolder', 'pageId')
+
+          const childFolderIds = level1.filter(i => i.isFolder).map(i => i.id)
+          const level2 = childFolderIds.length > 0
+            ? await WIKI.models.knex('pageTree')
+              .whereIn('parent', childFolderIds)
+              .where({ localeCode: pageArgs.locale })
+              .orderBy([{ column: 'isFolder', order: 'desc' }, 'title'])
+              .select('id', 'path', 'title', 'isFolder', 'pageId', 'parent')
+            : []
+
+          const buildItemHtml = (item, indent) => {
+            const icon = item.isFolder ? '📁' : '📄'
+            const href = `/${pageArgs.locale}/${item.path}`
+            const pad = indent ? 'style="margin-left:1.5em"' : ''
+            return `<div class="wiki-dir-item" ${pad}>${icon} <a href="${href}">${_.escape(item.title)}</a></div>`
+          }
+
+          const lines = []
+          for (const item of level1) {
+            lines.push(buildItemHtml(item, false))
+            if (item.isFolder) {
+              const children = level2.filter(c => c.parent === item.id)
+              for (const child of children) {
+                lines.push(buildItemHtml(child, true))
+              }
+            }
+          }
+
+          const dirTitle = folderRow.title || pageArgs.path.split('/').pop()
+          const renderHtml = `<h2>Contents</h2>
+${lines.length > 0 ? lines.join('\n') : '<p><em>No pages or sub-directories found.</em></p>'}`
+
+          let sdi = 1
+          const sidebar = (await WIKI.models.navigation.getTree({ cache: true, locale: pageArgs.locale, groups: req.user.groups })).map(n => ({
+            i: `sdi-${sdi++}`,
+            k: n.kind,
+            l: n.label,
+            c: n.icon,
+            y: n.targetType,
+            t: n.target
+          }))
+
+          const injectCode = {
+            css: (WIKI.config.theming.injectCSS || '') + '\n.wiki-dir-item{padding:2px 0;line-height:1.6}',
+            head: WIKI.config.theming.injectHead,
+            body: WIKI.config.theming.injectBody
+          }
+
+          const emptyComments = { head: '', body: '', main: '', codeTemplate: '' }
+          const fakePage = {
+            id: 0,
+            localeCode: pageArgs.locale,
+            path: pageArgs.path,
+            title: dirTitle,
+            description: '',
+            tags: [],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            authorName: '',
+            authorId: 0,
+            editorKey: 'markdown',
+            isPublished: true,
+            toc: '[]',
+            extra: { css: '', js: '' },
+            render: renderHtml
+          }
+
+          _.set(res.locals, 'pageMeta.title', dirTitle)
+          res.render('page', {
+            page: fakePage,
+            sidebar,
+            injectCode,
+            comments: emptyComments,
+            effectivePermissions,
+            pageFilename: ''
+          })
         } else {
-          res.status(404).render('notfound', { action: 'view' })
+          _.set(res.locals, 'pageMeta.title', 'Page Not Found')
+          res.status(404).render('new', { path: pageArgs.path, locale: pageArgs.locale, canWrite: effectivePermissions.pages.write })
         }
       }
     } catch (err) {
