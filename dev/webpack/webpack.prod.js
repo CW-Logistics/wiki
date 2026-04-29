@@ -13,7 +13,6 @@ const MiniCssExtractPlugin = require('mini-css-extract-plugin')
 const CssMinimizerPlugin = require('css-minimizer-webpack-plugin')
 const MomentTimezoneDataPlugin = require('moment-timezone-data-webpack-plugin')
 
-const now = Math.round(Date.now() / 1000)
 
 const babelConfig = fs.readJsonSync(path.join(process.cwd(), '.babelrc'))
 
@@ -31,8 +30,8 @@ module.exports = {
   output: {
     path: path.join(process.cwd(), 'assets'),
     publicPath: '/_assets/',
-    filename: `js/[name].js?${now}`,
-    chunkFilename: `js/[name].js?${now}`,
+    filename: 'js/[name].[contenthash].js',
+    chunkFilename: 'js/[name].[contenthash].js',
     globalObject: 'this',
     crossOriginLoading: 'use-credentials'
   },
