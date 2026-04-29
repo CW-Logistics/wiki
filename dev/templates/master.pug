@@ -51,6 +51,12 @@ html(lang=siteConfig.lang)
         href='https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css'
         )
 
+    //- Font preloads — Roboto is used on every page; preloading moves these requests to run
+    //- in parallel with app.js rather than being discovered after CSS is parsed by the browser.
+    link(rel='preload' as='font' type='font/woff2' href='/_assets/fonts/Roboto-Regular.woff2' crossorigin)
+    link(rel='preload' as='font' type='font/woff2' href='/_assets/fonts/Roboto-Medium.woff2' crossorigin)
+    link(rel='preload' as='font' type='font/woff2' href='/_assets/fonts/Roboto-Bold.woff2' crossorigin)
+
     //- CSS
     <% for (var index in htmlWebpackPlugin.files.css) { %>
       <% if (htmlWebpackPlugin.files.cssIntegrity) { %>

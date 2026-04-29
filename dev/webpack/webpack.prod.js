@@ -189,6 +189,7 @@ module.exports = {
       'process.env.NODE_ENV': JSON.stringify('production'),
       'process.env.CURRENT_THEME': JSON.stringify(_.defaultTo(yargs.theme, 'default'))
     }),
+    ...(yargs.analyze ? [new BundleAnalyzerPlugin({ analyzerMode: 'static', reportFilename: '../temp/bundle-report.html', openAnalyzer: false })] : [])
   ],
   optimization: {
     minimize: true,
@@ -203,7 +204,7 @@ module.exports = {
     splitChunks: {
       name: false,
       minChunks: 2,
-      minSize: 50000
+      minSize: 200000
     },
     runtimeChunk: 'single'
   },

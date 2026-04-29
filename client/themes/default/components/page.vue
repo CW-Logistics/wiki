@@ -360,8 +360,6 @@
 import { StatusIndicator } from 'vue-status-indicator'
 import Tabset from './tabset.vue'
 import NavSidebar from './nav-sidebar.vue'
-import Prism from 'prismjs'
-import mermaid from 'mermaid'
 import { get, sync } from 'vuex-pathify'
 import _ from 'lodash'
 import ClipboardJS from 'clipboard'
@@ -371,45 +369,6 @@ import Vue from 'vue'
 
 Vue.component('Tabset', Tabset)
 
-Prism.plugins.autoloader.languages_path = '/_assets/js/prism/'
-// mermaid is already bundled; mark it as loaded so autoloader doesn't fetch a conflicting plugin
-Prism.languages.mermaid = Prism.languages.mermaid || {}
-Prism.plugins.NormalizeWhitespace.setDefaults({
-  'remove-trailing': true,
-  'remove-indent': true,
-  'left-trim': true,
-  'right-trim': true,
-  'remove-initial-line-feed': true,
-  'tabs-to-spaces': 2
-})
-if (!Prism.plugins.toolbar._wikiCopyRegistered) {
-  Prism.plugins.toolbar._wikiCopyRegistered = true
-  Prism.plugins.toolbar.registerButton('copy-to-clipboard', (env) => {
-  let linkCopy = document.createElement('button')
-  linkCopy.textContent = 'Copy'
-
-  const clip = new ClipboardJS(linkCopy, {
-    text: () => { return env.code }
-  })
-
-  clip.on('success', () => {
-    linkCopy.textContent = 'Copied!'
-    resetClipboardText()
-  })
-  clip.on('error', () => {
-    linkCopy.textContent = 'Press Ctrl+C to copy'
-    resetClipboardText()
-  })
-
-  return linkCopy
-
-  function resetClipboardText() {
-    setTimeout(() => {
-      linkCopy.textContent = 'Copy'
-    }, 5000)
-  }
-})
-}
 
 export default {
   components: {
@@ -621,14 +580,56 @@ export default {
       this.handleSideNavVisibility()
     }, 500))
 
-    // -> Highlight Code Blocks
-    Prism.highlightAllUnder(this.$refs.container)
+    // -> Highlight Code Blocks (only load Prism if the page actually has code blocks)
+    if (this.$refs.container.querySelector('code[class*="language-"]')) {
+      Promise.all([
+        import(/* webpackChunkName: "prism-core" */ 'prismjs'),
+        import(/* webpackChunkName: "prism-core" */ 'prismjs/plugins/autoloader/prism-autoloader'),
+        import(/* webpackChunkName: "prism-core" */ 'prismjs/plugins/toolbar/prism-toolbar'),
+        import(/* webpackChunkName: "prism-core" */ 'prismjs/plugins/normalize-whitespace/prism-normalize-whitespace')
+      ]).then(([{ default: Prism }]) => {
+        Prism.plugins.autoloader.languages_path = '/_assets/js/prism/'
+        Prism.languages.mermaid = Prism.languages.mermaid || {}
+        Prism.plugins.NormalizeWhitespace.setDefaults({
+          'remove-trailing': true,
+          'remove-indent': true,
+          'left-trim': true,
+          'right-trim': true,
+          'remove-initial-line-feed': true,
+          'tabs-to-spaces': 2
+        })
+        if (!Prism.plugins.toolbar._wikiCopyRegistered) {
+          Prism.plugins.toolbar._wikiCopyRegistered = true
+          Prism.plugins.toolbar.registerButton('copy-to-clipboard', (env) => {
+            let linkCopy = document.createElement('button')
+            linkCopy.textContent = 'Copy'
+            const clip = new ClipboardJS(linkCopy, {
+              text: () => { return env.code }
+            })
+            clip.on('success', () => {
+              linkCopy.textContent = 'Copied!'
+              setTimeout(() => { linkCopy.textContent = 'Copy' }, 5000)
+            })
+            clip.on('error', () => {
+              linkCopy.textContent = 'Press Ctrl+C to copy'
+              setTimeout(() => { linkCopy.textContent = 'Copy' }, 5000)
+            })
+            return linkCopy
+          })
+        }
+        Prism.highlightAllUnder(this.$refs.container)
+      })
+    }
 
-    // -> Render Mermaid diagrams
-    mermaid.mermaidAPI.initialize({
-      startOnLoad: true,
-      theme: this.$vuetify.theme.dark ? `dark` : `default`
-    })
+    // -> Render Mermaid diagrams (only load mermaid if the page has diagram blocks)
+    if (this.$refs.container.querySelector('.mermaid')) {
+      import(/* webpackChunkName: "mermaid", webpackPrefetch: true */ 'mermaid').then(({ default: mermaid }) => {
+        mermaid.mermaidAPI.initialize({
+          startOnLoad: true,
+          theme: this.$vuetify.theme.dark ? `dark` : `default`
+        })
+      })
+    }
 
     // -> Handle anchor scrolling
     if (window.location.hash && window.location.hash.length > 1) {
