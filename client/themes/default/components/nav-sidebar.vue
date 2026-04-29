@@ -198,18 +198,21 @@ export default {
         return
       }
 
-      // If this page has a matching folder node (same path), treat it as a folder index
-      // and show the folder's children rather than the page's siblings
+      // If there is a folder node at the same path, this page is a folder-index page:
+      // show the folder's children rather than the page's siblings.
       const matchingFolder = _.find(items, i => i.isFolder && i.path === curPage.path)
-      const activeFolder = matchingFolder || null
 
-      // Walk up ancestors to build the breadcrumb.
-      // When curPage is itself the folder node (folder-index pattern), matchingFolder === curPage,
-      // so we start walking from curPage.parent — those ancestors go into the breadcrumb trail,
-      // and curPage becomes currentParent (the active level). We must NOT push matchingFolder
-      // into invertedAncestors again or it ends up duplicated/reversed in the breadcrumb.
+      // Determine which node is the "active directory level" and which parent to walk from.
+      // - Folder-index page (curPage IS the folder row, i.e. same id): active level = curPage,
+      //   walk ancestors from curPage.parent, then append curPage as deepest breadcrumb.
+      // - Separate page + same-path folder: active level = matchingFolder,
+      //   walk ancestors from matchingFolder.parent, then append matchingFolder as deepest breadcrumb.
+      // - Plain page (no matching folder): active level = deepest ancestor folder,
+      //   walk ancestors from curPage.parent, don't append anything extra.
       const isFolderIndex = matchingFolder && matchingFolder.id === curPage.id
-      let curParentId = matchingFolder ? matchingFolder.parent : curPage.parent
+      const activeFolder = isFolderIndex ? curPage : matchingFolder
+
+      let curParentId = activeFolder ? activeFolder.parent : curPage.parent
       let invertedAncestors = []
       while (curParentId) {
         const curParent = _.find(items, ['id', curParentId])
@@ -220,14 +223,14 @@ export default {
         curParentId = curParent.parent
       }
 
-      if (matchingFolder && !isFolderIndex) {
-        // Separate page + folder at same path: folder is the active level, push it last
-        invertedAncestors.push(matchingFolder)
+      const ancestors = invertedAncestors.reverse()
+      // Append the active folder as the deepest breadcrumb item when it exists.
+      if (activeFolder) {
+        ancestors.push(activeFolder)
       }
 
-      const activeParent = isFolderIndex ? curPage : (matchingFolder || curPage)
-      this.parents = [this.currentParent, ...invertedAncestors.reverse(), activeParent]
-      this.currentParent = activeParent
+      this.parents = [this.currentParent, ...ancestors]
+      this.currentParent = _.last(this.parents)
 
       const parentId = activeFolder ? activeFolder.id : curPage.parent
       this.loadedCache = [parentId]
