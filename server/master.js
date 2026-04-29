@@ -60,6 +60,18 @@ module.exports = async () => {
       res.sendStatus(404)
     }
   })
+  // JS and CSS filenames contain a content hash, so they are safe to cache indefinitely.
+  // Everything else (fonts, SVGs, favicons, images) uses no hash and gets a shorter TTL.
+  app.use('/_assets/js', express.static(path.join(WIKI.ROOTPATH, 'assets', 'js'), {
+    index: false,
+    maxAge: WIKI.devMode ? '0' : '365d',
+    immutable: !WIKI.devMode
+  }))
+  app.use('/_assets/css', express.static(path.join(WIKI.ROOTPATH, 'assets', 'css'), {
+    index: false,
+    maxAge: WIKI.devMode ? '0' : '365d',
+    immutable: !WIKI.devMode
+  }))
   app.use('/_assets', express.static(path.join(WIKI.ROOTPATH, 'assets'), {
     index: false,
     maxAge: WIKI.devMode ? '0' : '7d'

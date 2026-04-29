@@ -48,7 +48,7 @@ defaults:
     company: ''
     contentLicense: ''
     footerOverride: ''
-    logoUrl: https://static.requarks.io/logo/wikijs-butterfly.svg
+    logoUrl: /_assets/svg/logo-wikijs-butterfly.svg
     pageExtensions:
       - md
       - html
