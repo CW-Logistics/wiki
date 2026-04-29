@@ -198,12 +198,100 @@ foreach ($pkg in $changedPackages) {
     $copiedPkgs++
 }
 
+# --- Detect new transitive packages via yarn.lock diff ---
+# Changed top-level packages may pull in new sub-packages (e.g. @simple-git/args-pathspec
+# added as a dependency of simple-git) that are hoisted to node_modules but not listed in
+# our own package.json. yarn.lock records every resolved package, so diffing it against the
+# tag's lockfile tells us exactly which packages are new.
+Write-Host "`n==> Checking for new transitive packages not in tag..." -ForegroundColor Cyan
+
+function Get-LockfilePackageNames($lockfileLines) {
+    # yarn.lock entry headers look like: "name@version": or name@version:
+    # Extract just the package name (strip version specifier and quotes).
+    $names = [System.Collections.Generic.HashSet[string]]::new()
+    foreach ($line in $lockfileLines) {
+        if ($line -match '^"?(@?[^@"]+)@') {
+            $names.Add($Matches[1]) | Out-Null
+        }
+    }
+    return $names
+}
+
+$tagLockLines   = git show "${Tag}:yarn.lock" 2>$null
+$curLockLines   = Get-Content (Join-Path $PSScriptRoot 'yarn.lock')
+$tagLockNames   = Get-LockfilePackageNames $tagLockLines
+$curLockNames   = Get-LockfilePackageNames $curLockLines
+
+$newTransitive = @()
+foreach ($pkg in $curLockNames) {
+    if (-not $tagLockNames.Contains($pkg)) {
+        # Only include packages that are actually installed in node_modules
+        $src = Join-Path $PSScriptRoot "node_modules\$($pkg.Replace('/', '\'))"
+        if (Test-Path $src) {
+            $newTransitive += $pkg
+        }
+    }
+}
+
+if ($newTransitive.Count -gt 0) {
+    Write-Host "  Found $($newTransitive.Count) new transitive package(s) not present at tag:" -ForegroundColor Yellow
+    foreach ($pkg in $newTransitive | Sort-Object) {
+        $src = Join-Path $PSScriptRoot "node_modules\$($pkg.Replace('/', '\'))"
+        $dest = Join-Path $OutputDir "node_modules\$($pkg.Replace('/', '\'))"
+        # Skip if already copied as a direct dependency
+        if (Test-Path $dest) { continue }
+        Write-Host "  + $pkg  (transitive, new since $Tag)" -ForegroundColor DarkGray
+        $destParent = Split-Path $dest -Parent
+        if (-not (Test-Path $destParent)) { New-Item -ItemType Directory -Path $destParent -Force | Out-Null }
+        Copy-Item $src $dest -Recurse -Force
+        $copiedPkgs++
+    }
+} else {
+    Write-Host "  No new transitive packages detected." -ForegroundColor DarkGray
+}
+
+# --- Validate the output: require the server entry point to catch missing modules ---
+Write-Host "`n==> Validating delta: checking require() resolution from output directory..." -ForegroundColor Cyan
+$validateScript = @'
+process.chdir(process.argv[2])
+// Patch WIKI global so modules that reference it during require don't throw
+global.WIKI = { logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }, config: {} }
+const failures = []
+const toCheck = [
+    './server/core/db',
+    './server/core/auth',
+    './server/core/mail',
+    './server/models/pages',
+    './server/models/assets',
+    './server/modules/storage/git/storage',
+    './server/modules/storage/disk/common',
+]
+for (const m of toCheck) {
+    try { require(m) } catch (e) {
+        if (e.code === 'MODULE_NOT_FOUND') failures.push(m + ': ' + e.message)
+    }
+}
+if (failures.length) {
+    console.error('MISSING MODULES:\n' + failures.join('\n'))
+    process.exit(1)
+} else {
+    console.log('All checked modules resolved OK.')
+}
+'@
+$validateScript | node - $OutputDir
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "  Validation found missing modules in the delta output (see above)."
+    Write-Warning "  You may need to copy additional packages manually before deploying."
+} else {
+    Write-Host "  Validation passed." -ForegroundColor Green
+}
+
 # --- Summary ---
 Write-Host "`n==> Done." -ForegroundColor Green
 Write-Host "    Tag       : $Tag"
 Write-Host "    Output    : $OutputDir"
 Write-Host "    Copied    : $copied file(s)"
-Write-Host "    Packages  : $copiedPkgs changed node_modules package(s) copied"
+Write-Host "    Packages  : $copiedPkgs node_modules package(s) copied ($($changedPackages.Count) direct, $($newTransitive.Count) transitive)"
 if ($missing -gt 0) {
     Write-Host "    Missing   : $missing file(s) (listed above as warnings)" -ForegroundColor Yellow
 }
