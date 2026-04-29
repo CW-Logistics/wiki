@@ -1,0 +1,16 @@
+mutation ($parentFolderId: Int!, $slug: String!) {
+  assets {
+    ensureFolder(parentFolderId: $parentFolderId, slug: $slug) {
+      responseResult {
+        succeeded
+        errorCode
+        message
+      }
+      folder {
+        id
+        slug
+        name
+      }
+    }
+  }
+}

@@ -237,6 +237,7 @@ import 'filepond/dist/filepond.min.css'
 import listAssetQuery from 'gql/editor/editor-media-query-list.gql'
 import listFolderAssetQuery from 'gql/editor/editor-media-query-folder-list.gql'
 import createAssetFolderMutation from 'gql/editor/editor-media-mutation-folder-create.gql'
+import ensureAssetFolderMutation from 'gql/editor/editor-media-mutation-folder-ensure.gql'
 import renameAssetMutation from 'gql/editor/editor-media-mutation-asset-rename.gql'
 import deleteAssetMutation from 'gql/editor/editor-media-mutation-asset-delete.gql'
 
@@ -335,6 +336,9 @@ export default {
       }
     }
   },
+  async mounted() {
+    await this.ensureMediaFolder()
+  },
   filters: {
     prettyBytes(num) {
       if (typeof num !== 'number' || isNaN(num)) {
@@ -360,6 +364,24 @@ export default {
     }
   },
   methods: {
+    async ensureMediaFolder() {
+      try {
+        const resp = await this.$apollo.mutate({
+          mutation: ensureAssetFolderMutation,
+          variables: { parentFolderId: 0, slug: 'media' }
+        })
+        const folder = _.get(resp, 'data.assets.ensureFolder.folder')
+        if (folder) {
+          this.$store.commit('editor/SET_MEDIA', {
+            folderTree: [folder],
+            currentFolderId: folder.id,
+            currentFileId: null
+          })
+        }
+      } catch (err) {
+        // silently fall back to root if the call fails
+      }
+    },
     async refresh() {
       await this.$apollo.queries.assets.refetch()
       this.$store.commit('showNotification', {

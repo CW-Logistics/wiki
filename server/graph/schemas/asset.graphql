@@ -36,6 +36,11 @@ type AssetMutation {
     name: String
   ): DefaultResponse @auth(requires: ["manage:system", "write:assets"])
 
+  ensureFolder(
+    parentFolderId: Int!
+    slug: String!
+  ): AssetFolderResponse @auth(requires: ["manage:system", "write:assets", "read:assets"])
+
   renameAsset(
     id: Int!
     filename: String!
@@ -70,6 +75,11 @@ type AssetFolder {
   id: Int!
   slug: String!
   name: String
+}
+
+type AssetFolderResponse {
+  responseResult: ResponseStatus!
+  folder: AssetFolder
 }
 
 enum AssetKind {

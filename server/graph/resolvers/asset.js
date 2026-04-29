@@ -72,6 +72,33 @@ module.exports = {
       }
     },
     /**
+     * Ensure a folder exists at the root level, creating it if necessary.
+     * Always returns the folder.
+     */
+    async ensureFolder(obj, args, context) {
+      try {
+        const folderSlug = sanitize(args.slug).toLowerCase()
+        const parentFolderId = args.parentFolderId === 0 ? null : args.parentFolderId
+        let folder = await WIKI.models.assetFolders.query().where({
+          parentId: parentFolderId,
+          slug: folderSlug
+        }).first()
+        if (!folder) {
+          folder = await WIKI.models.assetFolders.query().insertAndFetch({
+            slug: folderSlug,
+            name: folderSlug,
+            parentId: parentFolderId
+          })
+        }
+        return {
+          responseResult: graphHelper.generateSuccess('OK'),
+          folder
+        }
+      } catch (err) {
+        return graphHelper.generateError(err)
+      }
+    },
+    /**
      * Rename an Asset
      */
     async renameAsset(obj, args, context) {
