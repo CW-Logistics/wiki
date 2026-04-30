@@ -907,19 +907,10 @@ module.exports = class User extends Model {
       if (data.length > 1024 * 1024) {
         throw new Error('Avatar image filesize is too large. 1MB max.')
       }
-      const existing = await WIKI.models.knex('userAvatars').select('id').where('id', userId).first()
-      if (existing) {
-        await WIKI.models.knex('userAvatars').where({
-          id: userId
-        }).update({
-          data
-        })
-      } else {
-        await WIKI.models.knex('userAvatars').insert({
-          id: userId,
-          data
-        })
-      }
+      await WIKI.models.knex('userAvatars')
+        .insert({ id: userId, data })
+        .onConflict('id')
+        .merge(['data'])
     } catch (err) {
       WIKI.logger.warn(`Failed to process binary thumbnail data for user ${userId}: ${err.message}`)
     }

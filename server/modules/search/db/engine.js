@@ -32,18 +32,12 @@ module.exports = {
           builder.andWhere('localeCode', opts.locale)
         }
         if (opts.path) {
-          builder.andWhere('path', 'like', `${opts.path}%`)
+          builder.andWhereILike('path', `${opts.path}%`)
         }
         builder.andWhere(builderSub => {
-          if (WIKI.config.db.type === 'postgres') {
-            builderSub.where('title', 'ILIKE', `%${q}%`)
-            builderSub.orWhere('description', 'ILIKE', `%${q}%`)
-            builderSub.orWhere('path', 'ILIKE', `%${q.toLowerCase()}%`)
-          } else {
-            builderSub.where('title', 'LIKE', `%${q}%`)
-            builderSub.orWhere('description', 'LIKE', `%${q}%`)
-            builderSub.orWhere('path', 'LIKE', `%${q.toLowerCase()}%`)
-          }
+          builderSub.whereILike('title', `%${q}%`)
+          builderSub.orWhereILike('description', `%${q}%`)
+          builderSub.orWhereILike('path', `%${q}%`)
         })
       })
       .limit(WIKI.config.search.maxHits)

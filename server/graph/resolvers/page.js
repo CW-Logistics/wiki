@@ -217,12 +217,11 @@ module.exports = {
      */
     async searchTags (obj, args, context, info) {
       const query = _.trim(args.query)
-      const likeOp = WIKI.config.db.type === 'postgres' ? 'ILIKE' : 'LIKE'
       const rows = await WIKI.models.knex('tags')
         .select('tags.tag', 'pages.path', 'pages.localeCode as locale')
         .join('pageTags', 'pageTags.tagId', 'tags.id')
         .join('pages', 'pages.id', 'pageTags.pageId')
-        .where('tags.tag', likeOp, `%${query}%`)
+        .whereILike('tags.tag', `%${query}%`)
       const allTags = _.filter(rows, r => {
         return WIKI.auth.checkAccess(context.req.user, ['read:pages'], {
           path: r.path,

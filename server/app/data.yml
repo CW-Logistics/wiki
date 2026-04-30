@@ -59,6 +59,7 @@ defaults:
       verifySSL: true
     nav:
       mode: 'MIXED'
+      directoryDepth: 3
     theming:
       theme: 'default'
       iconset: 'md'

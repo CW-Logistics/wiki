@@ -565,45 +565,72 @@ router.get('/*', async (req, res, next) => {
         // -> Try to show a directory placeholder for paths that have child pages/folders
         const folderRow = await WIKI.models.knex('pageTree')
           .where({ path: pageArgs.path, localeCode: pageArgs.locale, isFolder: true })
-          .first('id', 'title')
+          .first('id', 'title', 'depth')
 
         if (folderRow) {
-          // Fetch two levels: direct children, then children of each child-folder
-          const level1 = await WIKI.models.knex('pageTree')
-            .where({ parent: folderRow.id, localeCode: pageArgs.locale })
+          const maxDepth = _.get(WIKI.config, 'nav.directoryDepth', 2)
+
+          // Single query: fetch all descendants within depth range whose ancestors array
+          // contains the folder id. Depth filter keeps the result set bounded;
+          // the LIKE filter on the JSON ancestors column is portable across all DB engines.
+          const rows = await WIKI.models.knex('pageTree')
+            .where({ localeCode: pageArgs.locale })
+            .whereBetween('depth', [folderRow.depth + 1, folderRow.depth + maxDepth])
+            .whereLike('ancestors', `%${folderRow.id}%`)
             .orderBy([{ column: 'isFolder', order: 'desc' }, 'title'])
-            .select('id', 'path', 'title', 'isFolder', 'pageId')
+            .select('id', 'path', 'title', 'isFolder', 'pageId', 'parent', 'depth')
 
-          const childFolderIds = level1.filter(i => i.isFolder).map(i => i.id)
-          const level2 = childFolderIds.length > 0
-            ? await WIKI.models.knex('pageTree')
-              .whereIn('parent', childFolderIds)
-              .where({ localeCode: pageArgs.locale })
-              .orderBy([{ column: 'isFolder', order: 'desc' }, 'title'])
-              .select('id', 'path', 'title', 'isFolder', 'pageId', 'parent')
-            : []
-
-          const buildItemHtml = (item, indent) => {
-            const icon = item.isFolder ? '📁' : '📄'
-            const href = `/${pageArgs.locale}/${item.path}`
-            const pad = indent ? 'style="margin-left:1.5em"' : ''
-            return `<div class="wiki-dir-item" ${pad}>${icon} <a href="${href}">${_.escape(item.title)}</a></div>`
+          // Group by parent for O(1) child lookup during HTML construction
+          const childrenByParent = {}
+          for (const row of rows) {
+            if (!childrenByParent[row.parent]) childrenByParent[row.parent] = []
+            childrenByParent[row.parent].push(row)
           }
 
-          const lines = []
-          for (const item of level1) {
-            lines.push(buildItemHtml(item, false))
-            if (item.isFolder) {
-              const children = level2.filter(c => c.parent === item.id)
-              for (const child of children) {
-                lines.push(buildItemHtml(child, true))
-              }
+          // Build HTML using the theme's native <details> card styling (no custom CSS needed).
+          // TOC is constructed from data directly — no heading elements in the DOM required.
+          // tocEntries is mutated in place as we recurse.
+          const buildHtml = (parentId, tocEntries) => {
+            const children = childrenByParent[parentId] || []
+            if (children.length === 0) return ''
+            const folders = children.filter(c => c.isFolder)
+            const pages = children.filter(c => !c.isFolder)
+            const parts = []
+
+            for (const item of folders) {
+              const href = `/${pageArgs.locale}/${item.path}`
+              const safeTitle = _.escape(item.title)
+              const childTocEntries = []
+              const inner = buildHtml(item.id, childTocEntries)
+              const anchorId = `dir-${item.id}`
+              parts.push(
+                `<details id="${anchorId}" open>` +
+                `<summary><a href="${href}">${safeTitle}</a></summary>` +
+                (inner || '<ul><li><em>Empty folder</em></li></ul>') +
+                `</details>`
+              )
+              tocEntries.push({ title: safeTitle, anchor: `#${anchorId}`, children: childTocEntries })
             }
+
+            if (pages.length > 0) {
+              parts.push('<ul>')
+              for (const item of pages) {
+                const href = `/${pageArgs.locale}/${item.path}`
+                const safeTitle = _.escape(item.title)
+                parts.push(`<li><a href="${href}">${safeTitle}</a></li>`)
+              }
+              parts.push('</ul>')
+            }
+
+            return parts.join('\n')
           }
+
+          const tocRoot = []
+          const body = buildHtml(folderRow.id, tocRoot)
+          const foldAllBtn = `<p><a id="wiki-dir-toggle" href="javascript:wikiDirToggle()" style="font-size:.85rem">Fold all</a></p>`
+          const renderHtml = body ? foldAllBtn + body : '<p><em>No pages or sub-directories found.</em></p>'
 
           const dirTitle = folderRow.title || pageArgs.path.split('/').pop()
-          const renderHtml = `<h2>Contents</h2>
-${lines.length > 0 ? lines.join('\n') : '<p><em>No pages or sub-directories found.</em></p>'}`
 
           let sdi = 1
           const sidebar = (await WIKI.models.navigation.getTree({ cache: true, locale: pageArgs.locale, groups: req.user.groups })).map(n => ({
@@ -615,10 +642,49 @@ ${lines.length > 0 ? lines.join('\n') : '<p><em>No pages or sub-directories foun
             t: n.target
           }))
 
+          // Flatten TOC anchors in Vue's render order (top-level items then their children)
+          // so we can embed them as a literal in the script — no DOM querying needed at runtime.
+          const tocAnchorsFlat = []
+          const flattenToc = (entries) => {
+            for (const e of entries) {
+              tocAnchorsFlat.push(e.anchor)
+              if (e.children) flattenToc(e.children)
+            }
+          }
+          flattenToc(tocRoot)
+
           const injectCode = {
-            css: (WIKI.config.theming.injectCSS || '') + '\n.wiki-dir-item{padding:2px 0;line-height:1.6}',
+            css: WIKI.config.theming.injectCSS,
             head: WIKI.config.theming.injectHead,
-            body: WIKI.config.theming.injectBody
+            body: (WIKI.config.theming.injectBody || '') + `<script>
+function wikiDirToggle(){
+  var all=document.querySelectorAll('.contents details'),
+      folded=all.length>0&&!all[0].open;
+  all.forEach(function(d){folded?d.setAttribute('open',''):d.removeAttribute('open')});
+  var t=document.getElementById('wiki-dir-toggle');
+  if(t)t.textContent=folded?'Fold all':'Unfold all';
+}
+function wikiDirOpenChain(el){
+  var node=el;
+  while(node){
+    if(node.tagName==='DETAILS')node.setAttribute('open','');
+    node=node.parentElement;
+  }
+}
+(function(){
+  var anchors=${JSON.stringify(tocAnchorsFlat)};
+  document.addEventListener('click',function(e){
+    var li=e.target.closest('.page-toc-card .v-list-item');
+    if(!li)return;
+    var allLi=Array.from(document.querySelectorAll('.page-toc-card .v-list-item'));
+    var idx=allLi.indexOf(li);
+    if(idx<0||idx>=anchors.length)return;
+    var id=anchors[idx].replace('#','');
+    var target=document.getElementById(id);
+    if(target)wikiDirOpenChain(target);
+  },true);
+}());
+<\/script>`
           }
 
           const emptyComments = { head: '', body: '', main: '', codeTemplate: '' }
@@ -635,7 +701,7 @@ ${lines.length > 0 ? lines.join('\n') : '<p><em>No pages or sub-directories foun
             authorId: 0,
             editorKey: 'markdown',
             isPublished: true,
-            toc: '[]',
+            toc: JSON.stringify(tocRoot),
             extra: { css: '', js: '' },
             render: renderHtml
           }
