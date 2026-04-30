@@ -184,6 +184,7 @@
     "striptags": "3.2.0",
     "subscriptions-transport-ws": "0.9.18",
     "tar-fs": "2.1.4",
+    "tedious": "^14.0.0",
     "turndown": "7.2.2",
     "twemoji": "14.0.2",
     "uslug": "1.0.4",

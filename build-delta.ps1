@@ -127,6 +127,7 @@ $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 Write-Host "`n==> Copying $($releaseFiles.Count) files to: $OutputDir" -ForegroundColor Cyan
 
 if (Test-Path $OutputDir) {
+    Write-Host "`nClean the export directory: $OutputDir" -ForegroundColor Cyan
     Remove-Item $OutputDir -Recurse -Force
 }
 
@@ -205,49 +206,56 @@ foreach ($pkg in $changedPackages) {
 # tag's lockfile tells us exactly which packages are new.
 Write-Host "`n==> Checking for new transitive packages not in tag..." -ForegroundColor Cyan
 
-function Get-LockfilePackageNames($lockfileLines) {
-    # yarn.lock entry headers look like: "name@version": or name@version:
-    # Extract just the package name (strip version specifier and quotes).
-    $names = [System.Collections.Generic.HashSet[string]]::new()
+# Returns a hashtable of { packageName -> resolvedVersion } from a yarn.lock lines array
+function Get-LockfilePackageVersions($lockfileLines) {
+    $versions = @{}
+    $currentName = $null
     foreach ($line in $lockfileLines) {
         if ($line -match '^"?(@?[^@"]+)@') {
-            $names.Add($Matches[1]) | Out-Null
+            $currentName = $Matches[1]
+        } elseif ($currentName -and $line -match '^\s+version\s+"([^"]+)"') {
+            if (-not $versions.ContainsKey($currentName)) {
+                $versions[$currentName] = $Matches[1]
+            }
         }
     }
-    return $names
+    return $versions
 }
 
-$tagLockLines   = git show "${Tag}:yarn.lock" 2>$null
-$curLockLines   = Get-Content (Join-Path $PSScriptRoot 'yarn.lock')
-$tagLockNames   = Get-LockfilePackageNames $tagLockLines
-$curLockNames   = Get-LockfilePackageNames $curLockLines
+$tagLockLines    = git show "${Tag}:yarn.lock" 2>$null
+$curLockLines    = Get-Content (Join-Path $PSScriptRoot 'yarn.lock')
+$tagLockVersions = Get-LockfilePackageVersions $tagLockLines
+$curLockVersions = Get-LockfilePackageVersions $curLockLines
 
 $newTransitive = @()
-foreach ($pkg in $curLockNames) {
-    if (-not $tagLockNames.Contains($pkg)) {
-        # Only include packages that are actually installed in node_modules
-        $src = Join-Path $PSScriptRoot "node_modules\$($pkg.Replace('/', '\'))"
-        if (Test-Path $src) {
-            $newTransitive += $pkg
-        }
+$updatedTransitive = @()
+foreach ($pkg in $curLockVersions.Keys) {
+    $src = Join-Path $PSScriptRoot "node_modules\$($pkg.Replace('/', '\'))"
+    if (-not (Test-Path $src)) { continue }
+    if (-not $tagLockVersions.ContainsKey($pkg)) {
+        $newTransitive += $pkg
+    } elseif ($tagLockVersions[$pkg] -ne $curLockVersions[$pkg]) {
+        $updatedTransitive += $pkg
     }
 }
 
-if ($newTransitive.Count -gt 0) {
-    Write-Host "  Found $($newTransitive.Count) new transitive package(s) not present at tag:" -ForegroundColor Yellow
-    foreach ($pkg in $newTransitive | Sort-Object) {
+$transitiveChanged = @($newTransitive) + @($updatedTransitive)
+if ($transitiveChanged.Count -gt 0) {
+    Write-Host "  Found $($newTransitive.Count) new and $($updatedTransitive.Count) updated transitive package(s):" -ForegroundColor Yellow
+    foreach ($pkg in $transitiveChanged | Sort-Object) {
         $src = Join-Path $PSScriptRoot "node_modules\$($pkg.Replace('/', '\'))"
         $dest = Join-Path $OutputDir "node_modules\$($pkg.Replace('/', '\'))"
-        # Skip if already copied as a direct dependency
         if (Test-Path $dest) { continue }
-        Write-Host "  + $pkg  (transitive, new since $Tag)" -ForegroundColor DarkGray
+        $fromVer = $tagLockVersions[$pkg] ?? 'new'
+        $toVer   = $curLockVersions[$pkg]
+        Write-Host "  + $pkg  ($fromVer -> $toVer)" -ForegroundColor DarkGray
         $destParent = Split-Path $dest -Parent
         if (-not (Test-Path $destParent)) { New-Item -ItemType Directory -Path $destParent -Force | Out-Null }
         Copy-Item $src $dest -Recurse -Force
         $copiedPkgs++
     }
 } else {
-    Write-Host "  No new transitive packages detected." -ForegroundColor DarkGray
+    Write-Host "  No new or updated transitive packages detected." -ForegroundColor DarkGray
 }
 
 # --- Validate the output: require the server entry point to catch missing modules ---
@@ -291,7 +299,7 @@ Write-Host "`n==> Done." -ForegroundColor Green
 Write-Host "    Tag       : $Tag"
 Write-Host "    Output    : $OutputDir"
 Write-Host "    Copied    : $copied file(s)"
-Write-Host "    Packages  : $copiedPkgs node_modules package(s) copied ($($changedPackages.Count) direct, $($newTransitive.Count) transitive)"
+Write-Host "    Packages  : $copiedPkgs node_modules package(s) copied ($($changedPackages.Count) direct, $($newTransitive.Count) new transitive, $($updatedTransitive.Count) updated transitive)"
 if ($missing -gt 0) {
     Write-Host "    Missing   : $missing file(s) (listed above as warnings)" -ForegroundColor Yellow
 }
