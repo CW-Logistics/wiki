@@ -412,6 +412,143 @@ router.get('/_userav/:uid', async (req, res, next) => {
 })
 
 /**
+ * Build a directory index block for a folder path.
+ * Returns { html, toc, tocAnchorsFlat } or null if the path has no folder row.
+ *
+ * html          — ready-to-append HTML string (details cards + fold toggle)
+ * toc           — TOC entries array in Vue render order, to merge into the page TOC
+ * tocAnchorsFlat — flat ordered anchor list for the client-side open-on-click script
+ */
+async function buildDirIndex (path, locale, { openByDefault = true } = {}) {
+  const folderRow = await WIKI.models.knex('pageTree')
+    .where({ path, localeCode: locale, isFolder: true })
+    .first('id', 'title', 'depth')
+
+  if (!folderRow) return null
+
+  const maxDepth = _.get(WIKI.config, 'nav.directoryDepth', 2)
+
+  const rows = await WIKI.models.knex('pageTree')
+    .where({ localeCode: locale })
+    .whereBetween('depth', [folderRow.depth + 1, folderRow.depth + maxDepth])
+    .whereLike('ancestors', `%${folderRow.id}%`)
+    .orderBy([{ column: 'isFolder', order: 'desc' }, 'title'])
+    .select('id', 'path', 'title', 'isFolder', 'pageId', 'parent', 'depth')
+
+  if (rows.length === 0) return null
+
+  const childrenByParent = {}
+  for (const row of rows) {
+    if (!childrenByParent[row.parent]) childrenByParent[row.parent] = []
+    childrenByParent[row.parent].push(row)
+  }
+
+  const buildHtml = (parentId, tocEntries) => {
+    const children = childrenByParent[parentId] || []
+    if (children.length === 0) return ''
+    const folders = children.filter(c => c.isFolder)
+    const pages = children.filter(c => !c.isFolder)
+    const parts = []
+
+    const listItems = []
+
+    for (const item of folders) {
+      const href = `/${locale}/${item.path}`
+      const safeTitle = _.escape(item.title)
+      const childTocEntries = []
+      const inner = buildHtml(item.id, childTocEntries)
+      if (inner) {
+        const anchorId = `dir-${item.id}`
+        const openAttr = openByDefault ? ' open' : ''
+        parts.push(
+          `<details id="${anchorId}"${openAttr}>` +
+          `<summary><a href="${href}">${safeTitle}</a></summary>` +
+          inner +
+          `</details>`
+        )
+        tocEntries.push({ title: safeTitle, anchor: `#${anchorId}`, children: childTocEntries })
+      } else {
+        listItems.push(`<li class="wiki-dir-folder"><a href="${href}">${safeTitle}</a></li>`)
+        tocEntries.push({ title: safeTitle, anchor: href, children: [] })
+      }
+    }
+
+    for (const item of pages) {
+      const href = `/${locale}/${item.path}`
+      listItems.push(`<li class="wiki-dir-page"><a href="${href}">${_.escape(item.title)}</a></li>`)
+    }
+
+    if (listItems.length > 0) {
+      parts.push('<ul class="wiki-dir-list">' + listItems.join('') + '</ul>')
+    }
+
+    return parts.join('\n')
+  }
+
+  const tocRoot = []
+  const body = buildHtml(folderRow.id, tocRoot)
+  if (!body) return null
+
+  // Placeholder page: tocRoot is the top level, Vue renders each entry + its immediate children
+  const tocAnchorsFlat = []
+  for (const e of tocRoot) {
+    tocAnchorsFlat.push(e.anchor)
+    if (e.children) {
+      for (const c of e.children) tocAnchorsFlat.push(c.anchor)
+    }
+  }
+  // Mixed page: tocRoot is pushed as children of "Index" (second level in Vue TOC),
+  // so only the top entries of tocRoot are rendered — their children never appear
+  const tocAnchorsFlatShallow = tocRoot.map(e => e.anchor)
+
+  const toggleLabel = openByDefault ? 'Fold all' : 'Unfold all'
+  const html =
+    `<hr><div id="page-index">` +
+    `<h1 id="page-index-heading" class="toc-header"><a class="toc-anchor" href="#page-index-heading">&#xB6;</a> Index</h1>` +
+    `<p><a id="wiki-dir-toggle" href="javascript:wikiDirToggle()" style="font-size:.85rem">${toggleLabel}</a></p>` +
+    body +
+    `</div>`
+
+  return { html, toc: tocRoot, tocAnchorsFlat, tocAnchorsFlatShallow, folderTitle: folderRow.title || path.split('/').pop() }
+}
+
+/**
+ * Build the injectCode.body script block for directory index interactivity.
+ * tocAnchorsFlat is embedded as a literal so no DOM querying is needed at runtime.
+ */
+function buildDirIndexScript (tocAnchorsFlat, existingBody = '', tocOffset = 0) {
+  return existingBody + `<script>
+function wikiDirToggle(){
+  var all=document.querySelectorAll('#page-index details'),
+      folded=all.length>0&&!all[0].open;
+  all.forEach(function(d){folded?d.setAttribute('open',''):d.removeAttribute('open')});
+  var t=document.getElementById('wiki-dir-toggle');
+  if(t)t.textContent=folded?'Fold all':'Unfold all';
+}
+function wikiDirOpenChain(el){
+  var node=el;
+  while(node){
+    if(node.tagName==='DETAILS')node.setAttribute('open','');
+    node=node.parentElement;
+  }
+}
+(function(){
+  var anchors=${JSON.stringify(tocAnchorsFlat)},offset=${tocOffset};
+  document.addEventListener('click',function(e){
+    var li=e.target.closest('.page-toc-card .v-list-item');
+    if(!li)return;
+    var allLi=Array.from(document.querySelectorAll('.page-toc-card .v-list-item'));
+    var idx=allLi.indexOf(li)-offset;
+    if(idx<0||idx>=anchors.length)return;
+    var id=anchors[idx].replace('#','');
+    var target=document.getElementById(id);
+    if(target)wikiDirOpenChain(target);
+  },true);
+}());
+<\/script>`
+}
+
+/**
  * View document / asset
  */
 router.get('/*', async (req, res, next) => {
@@ -526,6 +663,18 @@ router.get('/*', async (req, res, next) => {
             page.toc = JSON.stringify(page.toc)
           }
 
+          // -> Append directory index if this page is a folder
+          const dirIndex = await buildDirIndex(pageArgs.path, pageArgs.locale, { openByDefault: false })
+          if (dirIndex) {
+            page.render += dirIndex.html
+            const pageToc = JSON.parse(page.toc)
+            const countTocRendered = (entries) => entries.reduce((n, e) => n + 1 + (e.children ? e.children.length : 0), 0)
+            const pageTocOffset = countTocRendered(pageToc) + 1 // +1 for the separator entry
+            pageToc.push({ title: '', anchor: '---:Index' }, ...dirIndex.toc)
+            page.toc = JSON.stringify(pageToc)
+            injectCode.body = buildDirIndexScript(dirIndex.tocAnchorsFlat, injectCode.body || '', pageTocOffset)
+          }
+
           // -> Inject comments variables
           const commentTmpl = {
             codeTemplate: WIKI.data.commentProvider.codeTemplate,
@@ -563,74 +712,9 @@ router.get('/*', async (req, res, next) => {
         res.render('welcome', { locale: pageArgs.locale })
       } else {
         // -> Try to show a directory placeholder for paths that have child pages/folders
-        const folderRow = await WIKI.models.knex('pageTree')
-          .where({ path: pageArgs.path, localeCode: pageArgs.locale, isFolder: true })
-          .first('id', 'title', 'depth')
-
-        if (folderRow) {
-          const maxDepth = _.get(WIKI.config, 'nav.directoryDepth', 2)
-
-          // Single query: fetch all descendants within depth range whose ancestors array
-          // contains the folder id. Depth filter keeps the result set bounded;
-          // the LIKE filter on the JSON ancestors column is portable across all DB engines.
-          const rows = await WIKI.models.knex('pageTree')
-            .where({ localeCode: pageArgs.locale })
-            .whereBetween('depth', [folderRow.depth + 1, folderRow.depth + maxDepth])
-            .whereLike('ancestors', `%${folderRow.id}%`)
-            .orderBy([{ column: 'isFolder', order: 'desc' }, 'title'])
-            .select('id', 'path', 'title', 'isFolder', 'pageId', 'parent', 'depth')
-
-          // Group by parent for O(1) child lookup during HTML construction
-          const childrenByParent = {}
-          for (const row of rows) {
-            if (!childrenByParent[row.parent]) childrenByParent[row.parent] = []
-            childrenByParent[row.parent].push(row)
-          }
-
-          // Build HTML using the theme's native <details> card styling (no custom CSS needed).
-          // TOC is constructed from data directly — no heading elements in the DOM required.
-          // tocEntries is mutated in place as we recurse.
-          const buildHtml = (parentId, tocEntries) => {
-            const children = childrenByParent[parentId] || []
-            if (children.length === 0) return ''
-            const folders = children.filter(c => c.isFolder)
-            const pages = children.filter(c => !c.isFolder)
-            const parts = []
-
-            for (const item of folders) {
-              const href = `/${pageArgs.locale}/${item.path}`
-              const safeTitle = _.escape(item.title)
-              const childTocEntries = []
-              const inner = buildHtml(item.id, childTocEntries)
-              const anchorId = `dir-${item.id}`
-              parts.push(
-                `<details id="${anchorId}" open>` +
-                `<summary><a href="${href}">${safeTitle}</a></summary>` +
-                (inner || '<ul><li><em>Empty folder</em></li></ul>') +
-                `</details>`
-              )
-              tocEntries.push({ title: safeTitle, anchor: `#${anchorId}`, children: childTocEntries })
-            }
-
-            if (pages.length > 0) {
-              parts.push('<ul>')
-              for (const item of pages) {
-                const href = `/${pageArgs.locale}/${item.path}`
-                const safeTitle = _.escape(item.title)
-                parts.push(`<li><a href="${href}">${safeTitle}</a></li>`)
-              }
-              parts.push('</ul>')
-            }
-
-            return parts.join('\n')
-          }
-
-          const tocRoot = []
-          const body = buildHtml(folderRow.id, tocRoot)
-          const foldAllBtn = `<p><a id="wiki-dir-toggle" href="javascript:wikiDirToggle()" style="font-size:.85rem">Fold all</a></p>`
-          const renderHtml = body ? foldAllBtn + body : '<p><em>No pages or sub-directories found.</em></p>'
-
-          const dirTitle = folderRow.title || pageArgs.path.split('/').pop()
+        const dirIndex = await buildDirIndex(pageArgs.path, pageArgs.locale, { openByDefault: true })
+        if (dirIndex) {
+          const dirTitle = dirIndex.folderTitle || pageArgs.path.split('/').pop()
 
           let sdi = 1
           const sidebar = (await WIKI.models.navigation.getTree({ cache: true, locale: pageArgs.locale, groups: req.user.groups })).map(n => ({
@@ -642,49 +726,10 @@ router.get('/*', async (req, res, next) => {
             t: n.target
           }))
 
-          // Flatten TOC anchors in Vue's render order (top-level items then their children)
-          // so we can embed them as a literal in the script — no DOM querying needed at runtime.
-          const tocAnchorsFlat = []
-          const flattenToc = (entries) => {
-            for (const e of entries) {
-              tocAnchorsFlat.push(e.anchor)
-              if (e.children) flattenToc(e.children)
-            }
-          }
-          flattenToc(tocRoot)
-
           const injectCode = {
             css: WIKI.config.theming.injectCSS,
             head: WIKI.config.theming.injectHead,
-            body: (WIKI.config.theming.injectBody || '') + `<script>
-function wikiDirToggle(){
-  var all=document.querySelectorAll('.contents details'),
-      folded=all.length>0&&!all[0].open;
-  all.forEach(function(d){folded?d.setAttribute('open',''):d.removeAttribute('open')});
-  var t=document.getElementById('wiki-dir-toggle');
-  if(t)t.textContent=folded?'Fold all':'Unfold all';
-}
-function wikiDirOpenChain(el){
-  var node=el;
-  while(node){
-    if(node.tagName==='DETAILS')node.setAttribute('open','');
-    node=node.parentElement;
-  }
-}
-(function(){
-  var anchors=${JSON.stringify(tocAnchorsFlat)};
-  document.addEventListener('click',function(e){
-    var li=e.target.closest('.page-toc-card .v-list-item');
-    if(!li)return;
-    var allLi=Array.from(document.querySelectorAll('.page-toc-card .v-list-item'));
-    var idx=allLi.indexOf(li);
-    if(idx<0||idx>=anchors.length)return;
-    var id=anchors[idx].replace('#','');
-    var target=document.getElementById(id);
-    if(target)wikiDirOpenChain(target);
-  },true);
-}());
-<\/script>`
+            body: buildDirIndexScript(dirIndex.tocAnchorsFlat, WIKI.config.theming.injectBody || '')
           }
 
           const emptyComments = { head: '', body: '', main: '', codeTemplate: '' }
@@ -701,9 +746,9 @@ function wikiDirOpenChain(el){
             authorId: 0,
             editorKey: 'markdown',
             isPublished: true,
-            toc: JSON.stringify(tocRoot),
+            toc: JSON.stringify(dirIndex.toc),
             extra: { css: '', js: '' },
-            render: renderHtml
+            render: dirIndex.html.replace(/^<hr>/, '')
           }
 
           _.set(res.locals, 'pageMeta.title', dirTitle)

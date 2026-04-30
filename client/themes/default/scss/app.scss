@@ -677,6 +677,15 @@
         content: '\25C3';
       }
     }
+    &.wiki-dir-list > li::before {
+      content: none;
+    }
+    &.wiki-dir-list > li.wiki-dir-folder::before {
+      content: '\25b6';
+    }
+    &.wiki-dir-list > li.wiki-dir-page::before {
+      content: '\203a';
+    }
   }
   ol, ul:not(.tabset-tabs) {
     > li {
