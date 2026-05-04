@@ -29,7 +29,7 @@ module.exports = {
     WIKI.logger.info('(STORAGE/GIT) Initializing...')
     this.repoPath = path.resolve(WIKI.ROOTPATH, this.config.localRepoPath)
     await fs.ensureDir(this.repoPath)
-    this.git = sgit(this.repoPath, { maxConcurrentProcesses: 1, spawnOptions: { windowsHide: true } })
+    this.git = sgit(this.repoPath, { maxConcurrentProcesses: 1, spawnOptions: { windowsHide: true }, unsafe: { allowUnsafeSshCommand: true } })
 
     // Set custom binary path
     if (!_.isEmpty(this.config.gitBinaryPath)) {
