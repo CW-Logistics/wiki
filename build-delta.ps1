@@ -259,10 +259,10 @@ if ($transitiveChanged.Count -gt 0) {
 }
 
 # --- Validate the output: require the server entry point to catch missing modules ---
+# Write the validation script into the output dir and run it from there, so Node's
+# module resolution uses only the output's node_modules — not the source tree.
 Write-Host "`n==> Validating delta: checking require() resolution from output directory..." -ForegroundColor Cyan
 $validateScript = @'
-process.chdir(process.argv[2])
-// Patch WIKI global so modules that reference it during require don't throw
 global.WIKI = { logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }, config: {} }
 const failures = []
 const toCheck = [
@@ -286,8 +286,12 @@ if (failures.length) {
     console.log('All checked modules resolved OK.')
 }
 '@
-$validateScript | node - $OutputDir
-if ($LASTEXITCODE -ne 0) {
+$validateScriptPath = Join-Path $OutputDir '_validate.js'
+$validateScript | Set-Content $validateScriptPath -Encoding UTF8
+node $validateScriptPath 2>&1
+$validateExit = $LASTEXITCODE
+Remove-Item $validateScriptPath -Force
+if ($validateExit -ne 0) {
     Write-Warning "  Validation found missing modules in the delta output (see above)."
     Write-Warning "  You may need to copy additional packages manually before deploying."
 } else {

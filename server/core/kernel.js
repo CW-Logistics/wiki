@@ -18,9 +18,7 @@ module.exports = {
       await WIKI.configSvc.applyFlags()
     } catch (err) {
       WIKI.logger.error('Database Initialization Error: ' + err.message)
-      if (WIKI.IS_DEBUG) {
-        WIKI.logger.error(err)
-      }
+      WIKI.logger.error(err.stack || err)
       process.exit(1)
     }
 
@@ -43,7 +41,7 @@ module.exports = {
       WIKI.extensions = require('./extensions')
       WIKI.asar = require('./asar')
     } catch (err) {
-      WIKI.logger.error(err)
+      WIKI.logger.error(err.stack || err)
       process.exit(1)
     }
   },
@@ -61,7 +59,7 @@ module.exports = {
         this.postBootMaster()
       }
     } catch (err) {
-      WIKI.logger.error(err)
+      WIKI.logger.error(err.stack || err)
       process.exit(1)
     }
   },
